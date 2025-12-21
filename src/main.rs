@@ -4,7 +4,7 @@
 #![allow(unused_imports)]
 #![feature(default_field_values)]
 
-
+use core::net;
 use std::fmt;
 use std::fmt::Display;
 use std::pin::Pin;
@@ -13,16 +13,18 @@ use std::path::Path;
 
 use std::collections::HashMap;
 use std::collections::BTreeMap;
-// use std::marker::Tuple;
+use json::stringify_pretty;
+use lazy_static::*;
 
 use std::string::String;
 use std::string::ParseError;
 use std::sync::Mutex;
 use futures::{future, Future};
 use futures::executor::block_on;
+use json;
 
 use regex::Regex;
-use reqwest::Response;
+use reqwest::blocking::{Response, Request};
 use urlencoding::encode;
 
 use std::error::Error;
@@ -73,6 +75,7 @@ zparseopts -D -E -F -- \
     || return                               
 
 */
+
 const VIDEO_FILE_EXTENTIONS: &str = r"(webm|mp4|mov|mkv|m4v|avi)";
 
 // #[derive(Debug)]
@@ -114,7 +117,12 @@ pub struct env_t {
     pub cache_dir: String = String::new()
 }
 
-static ENV: Mutex<env_t> = Mutex::new(env_t{ .. });
+lazy_static! {
+    pub static ref ENV: Mutex<env_t> = Mutex::new(env_t{ .. });
+    pub static ref DB: Mutex<db_t> = Mutex::new(db_t{ .. });
+}
+
+// static ENV: Mutex<env_t> = Mutex::new(env_t{ .. });
 
 fn load_env() -> Result<(), Box<dyn std::error::Error>> {
     let base_env_source = fs::read_to_string("base.env")?;
@@ -137,7 +145,7 @@ fn load_env() -> Result<(), Box<dyn std::error::Error>> {
             "SRC_DIR"     => env.src_dir   = v,
             "DST_DIR"     => env.dst_dir   = v,
             "OMDB_APIKEY" => env.omdb_key  = v,
-            "TMDB_APIKEY" => env.tmdb_key  = v,
+            "TMDB_READ_ACCESS_TOKEN" => env.tmdb_key  = v,
             "CACHE_DIR"   => env.cache_dir = v,
             _ => eprintln!("Unrecognized ENV Var: {}", k),
         }
@@ -146,29 +154,18 @@ fn load_env() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[derive(Default)]
-pub struct Probability {
-    value: f32 = 0.5,
-}
-
-
 pub struct db_t {
-    movies:  Vec<Movie>,
-    shows:   Vec<Show>
+    movies:  Vec<Movie> = Vec::new(),
+    shows:   Vec<Show> = Vec::new()
 }
 
-static DB: Mutex<db_t> = Mutex::new(db_t{
-    movies: Vec::new(),
-    shows:  Vec::new()
-});
 
 fn construct_db() -> Result<(), Box<dyn Error>> {
-    let prob = Probability{ value: 2.0, .. };
     let env = ENV.lock()?;
     let mut db = DB.lock()?;
     let movies_path = env.src_dir.clone() + "/movies";
     let shows_path = env.src_dir.clone() + "/shows";
-    let re = Regex::new(r".*(ignore|temp).*").unwrap();
+    let re = Regex::new(r".*(ignore|temp).*")?;
     let closure = move |x: &DirEntry| !re.is_match(x.file_name().to_str().unwrap());
     
 
@@ -246,7 +243,7 @@ fn populate_shows() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn query_api(builder: reqwest::RequestBuilder, url: String) -> impl Future<Output = Result<Response, reqwest::Error>> {
+fn query_api(builder: reqwest::blocking::RequestBuilder, url: String) -> Result<Response, reqwest::Error> {
         builder.send()
 }
 
@@ -280,78 +277,62 @@ fn query_api(builder: reqwest::RequestBuilder, url: String) -> impl Future<Outpu
 
 // FOR POSTERITY -- The return value here is implicitly (not really but the reason why is esoteric) required to have `+ Unpin` when wrapped in a Box
 // See https://stackoverflow.com/a/60562784
-fn query_for_show(show: &String, client: &reqwest::Client, env: &env_t) -> Box<dyn futures::Future<Output = Result<Response, reqwest::Error>> + Send + Unpin + 'static> {
-    println!("Before");
+fn query_for_show(show: &String, client: &reqwest::blocking::Client, env: &env_t) -> Result<Response, reqwest::Error> {
     let encoded = encode(&show);
     let url = format!("https://api.themoviedb.org/3/search/tv?query={}", encoded);
     let builder = client.clone().get(&url)
         .header("Authorization", format!("Bearer {}", env.tmdb_key))
         .header("accept", "application/json");
 
-    println!("After");
-    Box::new(query_api(builder, url.clone()))
+    query_api(builder, url.clone())
 }
 
-// async fn get_api_responses() -> Result<Vec<(usize, Response)>, Box<dyn std::error::Error>> {
-//     let env = ENV.lock()?;
-//     let db  = DB.lock()?;
-//
-//     let client = reqwest::Client::new();
-//
-//     let mut futures: Vec<Box<dyn futures::Future<Output = Result<Response, reqwest::Error>> + Send + Unpin + 'static>> = vec![];
-//     let mut results: Vec<(usize, Response)> = vec![];
-//     results.iter().count();
-//     // let mut db_mut = ;
-//     
-//     for show in db.shows.iter() { futures.push(query_for_show(&show.name, &client, &env)); }
-//
-//     // // shouldn't need to wait but API might be angry so maybe we should if we get issues
-//     let mut iter = futures.into_iter();
-//     for (i, v) in db.shows.iter().enumerate() {
-//         // let result = (**futures.get(i).unwrap()).await?;
-//         let result = iter.next().unwrap().into_future().await?;
-//         results.push((i, result));
-//     }
-//
-//     Ok(results)
-// }
-
-
-async fn get_api_responses() -> Result<Vec<(usize, Response)>, Box<dyn std::error::Error>> {
-    println!("Here 1");
-    let env = ENV.lock()?;
-    let db  = DB.lock()?;
-
-    let client = reqwest::Client::new();
+fn get_api_responses(env_lock: &env_t, db_lock: &db_t) -> Result<Vec<(usize, Response)>, Box<dyn std::error::Error>> {
+    let client = reqwest::blocking::Client::new();
 
     let mut results: Vec<(usize, Response)> = vec![];
-    println!("Here 2");
 
-    for (i, show) in db.shows.iter().enumerate() {
-        println!("Here 3");
-        let result = query_for_show(&show.name, &client, &env).await?;
-        println!("Finished: {}", &show.name); results.push((i, result));
+    for (i, show) in db_lock.shows.iter().enumerate() {
+        let search_query = Path::new(&show.path).file_name().unwrap().to_str().unwrap().to_string();
+        let result = query_for_show(&search_query, &client, &env_lock)?;
+        results.push((i, result));
     }
 
     Ok(results)
 }
 
-async fn api_stuff() -> Result<(), Box<dyn std::error::Error>> {
+fn api_stuff() -> Result<(), Box<dyn std::error::Error>> {
     let env = ENV.lock()?;
-    let db  = DB.lock()?;
-    let responses = get_api_responses().await?;
+    let mut db  = DB.lock()?;
+    let responses = get_api_responses(&env, &db)?;
+    let year_re = Regex::new(r"^[0-9]+")?;
     
+    let mut fail = 0;
     for (i, response) in responses {
-        let opt = db.shows.get(i);
-        if opt.is_none() { return Err(BasicError::boxed(format!("No object at element {}", i))); }
+        let opt = db.shows.get_mut(i);
+        if opt.is_none() { fail = 2; continue; }
         let show = opt.unwrap();
 
-        let text = response.text().await?;
+        let raw_json = json::parse(&response.text()?)?;
 
-        println!("{}\n{}\n\n", &show.name, text);
+        if raw_json["total_results"].as_u64().unwrap() == 0 { fail = 1; continue; }
+
+        let json = &raw_json["results"][0];
+        // println!("{}\n{:#?}\n", search_query, json);
+        show.name = json["name"].to_string();
+        show.tmdb = json["id"].to_string();
+        let year = json["first_air_date"].to_string();
+        show.year = format!("{}", year_re.find_iter(&year).next().unwrap().as_str()); // this is fucking stupid
+
+        println!("{:#?}", show);
+
     }
 
-    Ok(())
+    match fail {
+        1 => Err(BasicError::boxed("API FAILURE".to_string())),
+        2 => Err(BasicError::boxed(format!("No object at element"))),
+        _ => Ok(()), // default
+    }
 }
 
 fn debug_print() -> Result<(), Box<dyn std::error::Error>> {
@@ -363,14 +344,14 @@ fn debug_print() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    initialize(&ENV);
+    initialize(&DB);
 
     let _ = load_env();
     let _ = construct_db();
-    let result = api_stuff();
-    println!("{}", result.await.is_ok());
     let _ = populate_shows();
+    let _ = api_stuff();
     // let _ = debug_print();
 
     Ok(())
