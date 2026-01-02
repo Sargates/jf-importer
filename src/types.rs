@@ -1,11 +1,10 @@
-use std::fmt;
-use std::fs;
+use std::{fmt, fs};
 use std::ffi::OsStr;
 use regex::Regex;
 use ignore::{*};
-use std::fmt::Display;
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::path::{Path,PathBuf};
 
 use dotenv_parser::parse_dotenv;
 
@@ -17,7 +16,7 @@ impl BasicError {
     pub fn new(msg: String) -> Self { BasicError(msg) }
     pub fn boxed(msg: String) -> Box<dyn Error> { Box::new(BasicError(msg)) }
 }
-impl fmt::Display for BasicError { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{}", self.0) } }
+impl std::fmt::Display for BasicError { fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) } }
 impl Error for BasicError {}
 
 #[macro_export]
@@ -89,12 +88,14 @@ impl env_t {
 
 pub struct db_t {
     pub movies:  Vec<Movie>,
-    pub shows:   Vec<Show>
+    pub shows:   Vec<Show>,
+    pub failed_enumerations: Vec<PathBuf>
 }
 impl db_t {
     pub fn new() -> Self { db_t {
-        movies:  Vec::new(),
-        shows:   Vec::new() } }
+        movies:              Vec::new(),
+        shows:               Vec::new(), 
+        failed_enumerations: Vec::new() } }
 }
 
 pub struct App {
@@ -190,10 +191,19 @@ impl App {
 
             for result in builder.build() {
                 if is_dir(&result.clone()?) { continue; }
-                let file = result?;
+                let r = result?;
+                let path_obj = r.path();
                 let empty = OsStr::new("");
-                let file_name = file.path().file_name().unwrap_or(empty).to_string_lossy().to_string();
-                let path = &file.path().as_os_str().to_string_lossy().to_string();
+                println!("{:#?}", &path_obj);
+
+                if let None = path_obj.file_name() { // invalid path; non-UTF8 (potentially extended ASCII) path name
+                    self.db.failed_enumerations.push(path_obj.to_path_buf());
+                    continue;
+                }
+
+                let file_name = path_obj.file_name().unwrap().to_str().unwrap().to_string();
+
+                let path = &path_obj.as_os_str().to_string_lossy().to_string();
 
                 if !is_match(&file_name, &SE_match_re) { continue; } // Not in format `SXXEXX`
 

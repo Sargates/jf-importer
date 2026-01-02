@@ -99,7 +99,6 @@ fn api_stuff(app: &mut App) -> Result<Vec<Box<dyn Error>>, Box<dyn std::error::E
                            continue; }
         let movie = opt.unwrap();
 
-        
         let search_term = Path::new(&movie.path).file_stem().unwrap().to_str().unwrap().to_string();
         let hardcoded: bool;
         if let Ok(res) = api::check_override(&search_term) { hardcoded = true; }
@@ -116,7 +115,6 @@ fn api_stuff(app: &mut App) -> Result<Vec<Box<dyn Error>>, Box<dyn std::error::E
         if hardcoded { json = &raw_json;              } // response changes if we search directly w/ an imdb id or a string
         else         { json = &raw_json["Search"][0]; }
 
-        // println!("{:#?}\n{:#?}\n", &final_url, json);
         movie.name = json["Title"].to_string();
         movie.imdb = json["imdbID"].to_string();
         let year = json["Year"].to_string();
