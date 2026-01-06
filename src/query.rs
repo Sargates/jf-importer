@@ -28,6 +28,13 @@ use reqwest::blocking::{
 // TODO: Create a type that's returned by the `fetch_` methods when moving to async
 //?  Maybe include the returned Futures
 
+fn read_file(path: String) -> Result<String, Box<dyn Error>> {
+    let res = fs::read_to_string(&path);
+    if let Err(err) = res {
+        return Err(err!("OS Error for file: `{}` - {}", path, err));
+    }
+    Ok(res.unwrap())
+}
 impl App {
     pub fn new() -> Self {
         App {
@@ -37,8 +44,8 @@ impl App {
         }
     }
     pub fn load_env(mut self) -> Result<Self, Box<dyn Error>> {
-        let base_env_source = fs::read_to_string("base.env")?;
-        let env_source = fs::read_to_string(".env")?;
+        let base_env_source = read_file("base.env".to_string())?;
+        let env_source = read_file(".env".to_string())?;
 
         // I have no fucking idea if this is how you're supposed to do it. It doesn't make sense why we're 
         // adding a String and a &str type especially when Rust is extremely stingy about ownership. This language is weird
@@ -67,6 +74,7 @@ impl App {
         Ok(self)
     }
     pub fn build_db(mut self) -> Result<Self, Box<dyn Error>> {
+        // TODO: Check that these directories actually exist before running
         let movies_path = self.env.src_dir.clone() + "/movies"; // TODO: don't hardcode these
         let shows_path  = self.env.src_dir.clone() + "/shows";  // TODO: don't hardcode these
         let currying_match = |re: Regex, invert: bool| move |x: &DirEntry| { invert ^ re.is_match(x.file_name().to_str().unwrap()) }; // I HAVE NEVER GOTTEN TO USE CURRYING BEFORE!!! LET'S GO
@@ -163,7 +171,7 @@ impl Api {
     fn query_api(builder: RequestBuilder, url: String) -> reqwest::Result<Response> {
         builder.send()
     }
-    pub fn query_for_movie(movie_in: &String, client: &Client, env: &env_t) -> reqwest::Result<Response> {
+    pub fn query_for_movie(movie_in: &String, client: &Client, omdb_key: &String) -> reqwest::Result<Response> {
         let search_param: String;
 
         // Need to differentiate between searching with a raw string or by its imdb_id
@@ -173,8 +181,8 @@ impl Api {
         else                                           { search_param = movie_in.clone(); } 
 
         let url;
-        if imdb_id_re.is_match(&search_param) { url = format!("https://www.omdbapi.com/?apikey={}&type=movie&i={}",  env.omdb_key, search_param); }
-        else                                  { url = format!("https://www.omdbapi.com/?apikey={}&type=movie&s={}*", env.omdb_key, urlencoding::encode(&search_param)); }
+        if imdb_id_re.is_match(&search_param) { url = format!("https://www.omdbapi.com/?apikey={}&type=movie&i={}",  omdb_key, search_param); }
+        else                                  { url = format!("https://www.omdbapi.com/?apikey={}&type=movie&s={}*", omdb_key, urlencoding::encode(&search_param)); }
         let builder = client.get(&url);
         Api::query_api(builder, url.clone())
     }
@@ -186,11 +194,11 @@ impl Api {
         let id = json[movie].to_string();
         Ok(id)
     }
-    pub fn query_for_show(show: &String, client: &Client, env: &env_t) -> reqwest::Result<Response> {
+    pub fn query_for_show(show: &String, client: &Client, tmdb_key: &String) -> reqwest::Result<Response> {
         let encoded = urlencoding::encode(&show);
         let url = format!("https://api.themoviedb.org/3/search/tv?query={}", encoded);
         let builder = client.get(&url)
-            .header("Authorization", format!("Bearer {}", env.tmdb_key))
+            .header("Authorization", format!("Bearer {}", tmdb_key))
             .header("accept", "application/json");
 
         Api::query_api(builder, url.clone())
@@ -203,7 +211,7 @@ impl Api {
         for (i, show) in app.db.shows.iter().enumerate() {
             let show_ref = show.borrow();
             let search_query = Path::new(&show_ref.root_dir).file_name().unwrap().to_str().unwrap().to_string();
-            let result = Api::query_for_show(&search_query, &client, &app.env)?;
+            let result = Api::query_for_show(&search_query, &client, &app.env.tmdb_key)?;
             results.push((i, result));
         }
 
@@ -216,7 +224,7 @@ impl Api {
 
         for (i, movie) in app.db.movies.iter().enumerate() {
             let search_query = Path::new(&movie.src).file_stem().unwrap().to_str().unwrap().to_string();
-            let result = Api::query_for_movie(&search_query, &client, &app.env)?;
+            let result = Api::query_for_movie(&search_query, &client, &app.env.omdb_key)?;
             results.push((i, result));
         }
 
