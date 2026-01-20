@@ -91,6 +91,7 @@ impl App {
             if ! movie.path().is_file() { continue; }
             let mut m = Movie::new();
             m.src = movie.path().to_str().unwrap().to_string();
+            m.working_title = movie.file_name().to_str().unwrap().to_string();
             self.db.movies.push(m);
         }
         drop(builder);
@@ -103,13 +104,11 @@ impl App {
         for result in builder.build() {
             let show = result.unwrap();
             if ! show.path().is_dir() { continue; }
-            self.db.shows.push(
-                Rc::new( RefCell::new( Show {
-                    title: String::new(),
-                    root_dir: show.path().to_str().unwrap().to_string(),
-                    tmdb: String::new(),
-                    start_year: String::new(),
-                    episodes: Vec::new(), })));
+            let mut out = Show::new();
+            out.working_title = show.file_name().to_str().unwrap().to_string();
+            out.root_dir = show.path().to_str().unwrap().to_string();
+
+            self.db.shows.push(Rc::new(RefCell::new(out)));
         }
 
         Ok(self)

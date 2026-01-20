@@ -27,16 +27,19 @@ pub(crate) use err;
 
 pub struct Movie {
     pub title: String,
+    pub working_title:  String, // Title of the root directory. used as a fallback name because
+                                // `title` is uninitialized by default
     pub year:  String,
     pub imdb:  String,
     pub src:   String
 }
 impl Movie {
     pub fn new() -> Self { Movie { 
-        title: String::new(),
-        year: String::new(),
-        imdb: String::new(),
-        src: String::new(), } }
+        title:         String::new(),
+        working_title: String::new(),
+        year:          String::new(),
+        imdb:          String::new(),
+        src:           String::new(), } }
 }
 impl fmt::Debug for Movie {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -45,25 +48,31 @@ impl fmt::Debug for Movie {
 }
 
 pub struct Show {
-    pub title:      String,
-    pub start_year: String,
-    pub tmdb:       String,
-    pub root_dir:   String,
-    pub episodes:   Vec<Episode> //? "episodes" doesn't really work for things like featurettes or extras
+    pub title:          String,
+    pub working_title:  String, // Title of the root directory. used as a fallback name because
+                                // `title` is uninitialized by default
+    pub start_year:     String,
+    pub tmdb:           String,
+    pub root_dir:       String,
+    pub episodes:       Vec<Episode> //? "episodes" doesn't really work for things like featurettes or extras
 }
 impl Show {
     pub fn new() -> Self { Show {
-        title: String::new(),
-        root_dir: String::new(),
-        start_year: String::new(),
-        tmdb: String::new(),
-        episodes: Vec::new(), } }
-
+        title:          String::new(),
+        working_title:  String::new(),
+        root_dir:       String::new(),
+        start_year:     String::new(),
+        tmdb:           String::new(),
+        episodes:       Vec::new(), } }
 }
 impl fmt::Debug for Show {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "{} ({}) [{}]", self.title, self.start_year, self.tmdb)?;
-        for e in self.episodes.iter() { writeln!(f, "{:#?}", e); }
+        if self.title.is_empty() { // Can't return `Err` in this case. See https://doc.rust-lang.org/std/fmt/trait.Debug.html#errors
+            writeln!(f, "{} [Initialization Failure]", self.working_title);
+        } else {
+            writeln!(f, "{} ({}) [{}]", self.title, self.start_year, self.tmdb)?;
+            for e in self.episodes.iter() { writeln!(f, "{:#?}", e); }
+        }
         Ok(())
     }
 }
@@ -120,7 +129,6 @@ pub struct App {
     pub env: env_t,
     pub db: db_t,
     pub request_client: Client,
-
 }
 
 pub struct Api {}

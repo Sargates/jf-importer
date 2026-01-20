@@ -36,17 +36,24 @@
 //    Path and info
 
 mod types;
-mod query;
-mod process;
-
-
 use types::*;
+
+mod query;
+
+mod process;
 use process::*;
+// mod error; use error::*;
+
+// mod ui;
+// use ui::*;
 
 use reqwest;
 use regex::Regex;
+
 use std::error::Error;
 use std::path::Path;
+use std::mem::drop;
+
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = App::new()
@@ -59,18 +66,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut reference = show.borrow_mut();
 
         let response = reference.make_api_call(&app.request_client, &app.env.tmdb_key)?;
-        reference.update_info(response);
+        if let Err(err) = reference.update_info(response) { //* `response` is not changed if we errored out
+            eprintln!("API FAILURE: {}", reference.working_title);
+        }
+    }
+
+    for show in app.db.shows.iter() {
+        let reference = show.borrow();
+
         for episode in reference.episodes.iter() {
-            if let Ok(path) = VideoFile::mapped_path(episode, &dst_dir) { 
+            if let Ok(path) = episode.mapped_path(&dst_dir) {
                    println!("{} -> {}", episode.src, path); } 
             else { println!("{} -> {}", episode.src, "FAILURE!!!"); }
         }
     }
+
     for movie in app.db.movies.iter_mut() {
         let response = movie.make_api_call(&app.request_client, &app.env.omdb_key)?;
-        movie.update_info(response);
+        if let Err(err) = movie.update_info(response) { //* `movie` is not changed if we errored out
+            eprintln!("API FAILURE: {}", movie.working_title);
+        }
 
-        if let Ok(path) = VideoFile::mapped_path(movie, &dst_dir) { 
+        if let Ok(path) = movie.mapped_path(&dst_dir) {
                println!("{} -> {}", movie.src, path); } 
         else { println!("{} -> {}", movie.src, "FAILURE!!!"); }
     }

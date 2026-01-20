@@ -7,14 +7,21 @@ use std::ops::DerefMut;
 use std::rc::Rc;
 use reqwest::blocking::{Response, Client, Request, RequestBuilder};
 
+use std::{
+    // error::Error,
+    io::{Read, Write},
+    process::{Command, Stdio},
+};
+
+
 use crate::types::*;
 
-pub trait VideoFile { // polymorphism for Movie and Episode
+pub trait MoveableItem { // polymorphism for Movie and Episode
     fn src(&self) -> String;
     // fn r#type(&self) -> MoveType;
     fn mapped_path(&self, dst_dir: &String) -> Result<String,Box<dyn Error>>;
 }
-impl VideoFile for Movie {
+impl MoveableItem for Movie {
     fn src(&self) -> String { self.src.clone() }
     // fn r#type(&self) -> MoveType { MoveType::Movie }
     fn mapped_path(&self, dst_dir: &String) -> Result<String,Box<dyn Error>> {
@@ -32,7 +39,7 @@ impl VideoFile for Movie {
         Ok(out)
     }
 }
-impl VideoFile for Episode {
+impl MoveableItem for Episode {
     fn src(&self) -> String { self.src.clone() }
     // fn r#type(&self) -> MoveType { MoveType::Episode }
     fn mapped_path(&self, dst_dir: &String) -> Result<String,Box<dyn Error>> {
@@ -67,11 +74,11 @@ impl VideoFile for Episode {
         Ok(out)
     }
 }
-pub trait Item { // TODO: Rename this
+pub trait ApiItem { // TODO: Rename this
     fn make_api_call(&self, client: &Client, omdb_key: &String) -> reqwest::Result<Response>;
     fn update_info(&mut self, res: Response) -> Result<(), Box<dyn Error>>;
 }
-impl Item for Movie {
+impl ApiItem for Movie {
     fn make_api_call(&self, client: &Client, omdb_key: &String) -> reqwest::Result<Response> {
         let search_query = Path::new(&self.src).file_stem().unwrap().to_str().unwrap().to_string();
 
@@ -104,7 +111,7 @@ impl Item for Movie {
         Ok(())
     }
 }
-impl Item for Show {
+impl ApiItem for Show {
     fn make_api_call(&self, client: &Client, tmdb_key: &String) -> reqwest::Result<Response> {
         let search_query = Path::new(&self.root_dir).file_name().unwrap().to_str().unwrap().to_string();
         Api::query_for_show(&search_query, &client, tmdb_key)
@@ -130,12 +137,30 @@ impl Item for Show {
     }
 }
 
+fn check_hostname() -> Result<(), Box<dyn Error>> {
+    let mut proc = Command::new("hostname").spawn()?;
+    let mut stdout = proc.stdout.take().unwrap();
+
+    while proc.try_wait()?.is_none() {} // block until process is finished
+
+    let mut buf = [0u8; 253]; // 253 is the max hostname allowed by DNS. source: https://www.reddit.com/r/linuxquestions/comments/k8y5ek/comment/gf108ft/   
+    let len = stdout.read(&mut buf)?;
+
+    let hostname = std::str::from_utf8(&buf[..len])?;
+
+    match hostname {
+        "homelab" => { Ok(()) }, // TODO: don't hardcode this
+        _         => { Err(err!("Invalid host name. This is to prevent running on the wrong device for testing purposes.")) }
+    }
+}
+
 impl App {
     pub fn move_file(&self) -> Result<i32, Box<dyn Error>> {
+        check_hostname()?;
         // Assert that the dst_dir exists
         if let Err(err) = fs::exists(self.env.dst_dir.clone()) {
             return Err(BasicError::boxed(dbg!(err).to_string()));
-        } 
+        }
 
         // For every file:
         //   Make sure every src file exists
