@@ -1,0 +1,14 @@
+[package]
+name = "jellyfin-import-library"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "jellyfin_importer"
+path = "src/main.rs"
+
+[dependencies]
+jf-import-library = { path = "../lib" }
+
+
+
