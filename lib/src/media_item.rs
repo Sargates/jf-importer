@@ -1,5 +1,6 @@
 use std::fmt;
 use std::path::Path;
+use crate::api_query::*;
 
 trait ApiQuery {
 
@@ -9,59 +10,46 @@ trait ApiQuery {
 // TODO: Guarantee a Movie/Episode is valid before creating one
 // fn new(path: &str) -> Result(Movie, Self::Error);
 // Check that `new` succeeded and skip if it didn't
+
+#[derive(Debug)]
 pub struct Movie {
-    pub title: String,
-    pub year: String,
-    pub imdb: String,
     pub src: String,
+    pub query: QueryResponse
 }
 impl Movie {
-    pub fn new(src: String) -> Self {
-
+    pub(crate) fn new(src: String) -> Self {
         Movie {
-            title: String::new(),
-            year: String::new(),
-            imdb: String::new(),
-            src
+            src,
+            query: QueryResponse::None
         }
     }
-    pub fn is_queried(&self) {
-
-    }
-}
-impl fmt::Debug for Movie {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} ({}) [{}] - ({})", self.title, self.year, self.imdb, self.src)
-    }
 }
 
+#[derive(Debug)]
 pub struct Show {
-    pub title: String,
-    pub src: String,
-    pub start_year: String,
-    pub tmdb: String,
+    pub src: String, // directory containing show
+    pub query: QueryResponse
 }
-impl fmt::Debug for Show {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "{} ({}) [{}]", self.title, self.start_year, self.tmdb)?;
-        // if self.title.is_empty() { // Can't return `Err` in this case. See https://doc.rust-lang.org/std/fmt/trait.Debug.html#errors
-        //     writeln!(f, "{} [Initialization Failure]", self.working_title);
-        // } else {
-        //     for e in self.episodes.iter() { writeln!(f, "{:#?}", e); }
-        // }
-        Ok(())
+impl Show {
+    pub(crate) fn new(src: String) -> Self {
+        Show {
+            src,
+            query: QueryResponse::None
+        }
     }
 }
 
+#[derive(Debug)]
 pub struct Episode {
-    pub id: String, // Ex: S01E12
-    pub show: String, // Parent Show Title (dup)
     pub src: String,
+    pub query: QueryResponse,
 }
-impl fmt::Debug for Episode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} -> {}", self.id, self.src)?; 
-        Ok(())
+impl Episode {
+    pub(crate) fn new(src: String) -> Self {
+        Episode {
+            src,
+            query: QueryResponse::None
+        }
     }
 }
 

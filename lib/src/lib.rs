@@ -1,3 +1,4 @@
+// shut up rust analyzer!
 #![allow(dead_code)]
 #![allow(nonstandard_style)]
 #![allow(unused_variables)]
@@ -35,8 +36,14 @@
 //    How to represent Movies?
 //    Path and info
 
-mod env;
-mod media_item;
-mod api_query;
-mod dir_search;
+pub mod env;
+pub mod media_item;
+pub mod api_query;
+pub mod dir_search;
 
+// use crate::env::*;
+// use crate::media_item::*;
+// use crate::api_query::*;
+// use crate::dir_search::*;
+//
+// use dir_search::generate_catalog_tree;
