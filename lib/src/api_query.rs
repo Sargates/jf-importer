@@ -81,7 +81,7 @@ pub enum QueryResponse {
     },
     Episode {
         show_title: String, // duplicate
-        id: String,
+        // id: String,
     },
     None
 }
@@ -213,51 +213,54 @@ impl Queryable for Show {
             return Err(QueryError::FailedToExtractApiData(raw_json.pretty(2).clone()));
         }
 
+        for iterator in self.episodes.iter() {
+            let mut episode = iterator.borrow_mut();
+            episode.query = QueryResponse::Episode { show_title: title.clone() }
+        }
         self.query = QueryResponse::Show { title, start_year, tmdb };
 
         Ok(())
     }
 }
-impl Queryable for Episode {
-    type Error = QueryError;
-    fn query_api(&mut self, client: &Client) -> Result<Response, Self::Error> {
-        todo!()
-    }
-
-    fn process_response(&mut self, response: Response) -> Result<(), Self::Error> {
-        // We know these are good
-        let SE_match_re = Regex::new(r"[sS][0-9]+[eE][0-9]+").unwrap();
-        let SE_number_re = Regex::new(r"[0-9]+").unwrap(); // multipurpose regex for season and episode number
-        let is_match = move |x: &String, re: &Regex| re.is_match(x);
-
-        // TODO: Clean up this shit!
-        // this is duplicated from `create_episode`
-        let path = std::path::Path::new(&self.src);
-        let file_path = path.to_str().unwrap().to_string();
-
-        // TODO: Support Anime numbering
-        if !SE_match_re.is_match(&file_path) { return Err(QueryError::FailedToQueryApi); }
-
-        let first_match = SE_match_re.find(&file_path);
-        if first_match.is_none() { return Err(QueryError::FailedToQueryApi); } // just in case, too lazy to scour docs
-        let episode_ident = first_match.unwrap().as_str();
-
-        if SE_number_re.find_iter(&episode_ident).count() != 2 {
-            // ! Use `tracing`
-            eprintln!("Invalid episode identifier for path: {}", &file_path);
-            return Err(QueryError::FailedToQueryApi);
-        }
-
-        let mut iterator = SE_number_re.find_iter(&episode_ident);
-        let season_num = iterator.next().unwrap().as_str();
-        let episode_num = iterator.next().unwrap().as_str();
-        let episode_string = format!("S{}E{}", season_num, episode_num);
-
-        self.query = QueryResponse::Episode {
-            show_title: String::new(),
-            id: episode_string,
-        };
-
-        Ok(())
-    }
-}
+// impl Queryable for Episode {
+//     type Error = QueryError;
+//     fn query_api(&mut self, client: &Client) -> Result<Response, Self::Error> {
+//         todo!()
+//     }
+//
+//     // fn process_response(&mut self, response: Response) -> Result<(), Self::Error> {
+//     //     // We know these are good
+//     //     let SE_match_re = Regex::new(r"[sS][0-9]+[eE][0-9]+").unwrap();
+//     //     let SE_number_re = Regex::new(r"[0-9]+").unwrap(); // multipurpose regex for season and episode number
+//     //     let is_match = move |x: &String, re: &Regex| re.is_match(x);
+//     //
+//     //     // TODO: Clean up this shit!
+//     //     // this is duplicated from `create_episode`
+//     //     let path = std::path::Path::new(&self.src);
+//     //     let file_path = path.to_str().unwrap().to_string();
+//     //
+//     //     // TODO: Support Anime numbering
+//     //     if !SE_match_re.is_match(&file_path) { return Err(QueryError::FailedToQueryApi); }
+//     //
+//     //     let first_match = SE_match_re.find(&file_path);
+//     //     if first_match.is_none() { return Err(QueryError::FailedToQueryApi); } // just in case, too lazy to scour docs
+//     //     let episode_ident = first_match.unwrap().as_str();
+//     //
+//     //     if SE_number_re.find_iter(&episode_ident).count() != 2 {
+//     //         // ! Use `tracing`
+//     //         eprintln!("Invalid episode identifier for path: {}", &file_path);
+//     //         return Err(QueryError::FailedToQueryApi);
+//     //     }
+//     //
+//     //     let mut iterator = SE_number_re.find_iter(&episode_ident);
+//     //     let season_num = iterator.next().unwrap().as_str();
+//     //     let episode_num = iterator.next().unwrap().as_str();
+//     //     let episode_string = format!("S{}E{}", season_num, episode_num);
+//     //
+//     //     self.query = QueryResponse::Episode {
+//     //         show_title: String::new(),
+//     //     };
+//     //
+//     //     Ok(())
+//     // }
+// }

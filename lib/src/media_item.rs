@@ -48,9 +48,30 @@ impl Show {
     }
 }
 
+#[derive(Debug,Clone)]
+pub enum EpisodeId {
+    Traditional { season: u32, episode: u32, },
+    Anime { episode: u32, }
+}
+impl std::fmt::Display for EpisodeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", Into::<String>::into(self.clone()))
+    }
+}
+impl Into<String> for EpisodeId {
+    fn into(self) -> String {
+        match self {
+            EpisodeId::Traditional { season, episode } => 
+                format!("S{:02}E{:02}", season, episode),
+            EpisodeId::Anime { episode } => 
+                format!("{}", episode),
+        }
+    }
+}
 #[derive(Debug)]
 pub struct Episode {
     pub src: PathBuf,
+    pub id: EpisodeId,
     pub query: QueryResponse,
 }
 impl Episode {
@@ -79,14 +100,14 @@ impl Episode {
         }
 
         let mut iterator = SE_number_re.find_iter(&episode_ident);
-        let season_num = iterator.next().unwrap().as_str();
-        let episode_num = iterator.next().unwrap().as_str();
-        let episode_string = format!("S{}E{}", season_num, episode_num);
+        let season = iterator.next().unwrap().as_str().to_string().parse::<u32>().unwrap();
+        let episode = iterator.next().unwrap().as_str().to_string().parse::<u32>().unwrap();
 
         let src = path;
+        let id = EpisodeId::Traditional { season, episode };
         let query = QueryResponse::None;
 
-        Ok(Episode{ src, query })
+        Ok(Episode{ src, id, query })
     }
 }
 

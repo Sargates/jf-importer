@@ -30,17 +30,16 @@ fn recursive_print(node: &catalog_tree::TreeNode, old_indent: String) {
     print!("{}", old_indent);
     println!("{node}");
 
-    let mut next_indent = String::new();
-    if old_indent.chars().count() > 3 {
-        let split_point = old_indent.char_indices().rev().nth(3).map_or(0, |(idx, ch)| idx);
+    let mut next_indent = if old_indent.chars().count() > 3 {
+        let split_point = old_indent.char_indices().rev().nth(3).map_or(0, |(idx, _)| idx);
         let (rest, last) = old_indent.split_at(split_point);
         
         match &last.chars().nth(0).unwrap() {
-            '├' => { next_indent = String::from(rest) + connector }
-            '└' => { next_indent = String::from(rest) + empty }
-             _  => {}
+            '├' => String::from(rest) + connector,
+            '└' => String::from(rest) + empty,
+             _  => unreachable!()
         }
-    }
+    } else { String::new() };
 
     match &node {
         catalog_tree::TreeNode::Show {show, children} => {
@@ -76,83 +75,48 @@ fn main() -> () {
         return;
     }
 
-    let res = dir_search::generate_catalog_tree();
-
-    if let Err(err) = &res {
-        println!("Failed: {:?}", err);
-        return;
-    }
-    let mut tree = res.unwrap();
-
+    let mut tree = match dir_search::generate_catalog_tree() {
+        Ok(t) => t,
+        Err(err) => { panic!("Failed to create catalog tree! Err: {:?}", err); },
+    };
     println!("Success!");
 
     println!();
     println!();
     let client = Client::new();
 
-    println!("{}", std::env::var("VIDEO_FILE_EXTENTIONS").unwrap());
+    // println!("{}", std::env::var("VIDEO_FILE_EXTENTIONS").unwrap());
 
-    let mut categories = tree.tree.children_mut();
-
-    let movies = categories.get_mut(0).unwrap().children_mut();
-    for movie in movies {
-        if let catalog_tree::TreeNode::Movie(movie) = movie {
-            let res = movie.borrow_mut().query_api(&client);
-            if let Err(err) = res {
-                println!("Query Failure: {err:?} for {}", movie.borrow().src.to_string_lossy());
-                return;
-            }
-            let response = res.unwrap();
-            let status = movie.borrow_mut().process_response(response);
-            if let Err(err) = status {
-                println!("JSON Processing Failure: {err:?} for {}", movie.borrow().src.to_string_lossy());
-                return;
-            }
+    // Iterate over Movies in the catalog
+    for movie in tree.movies {
+        let res = movie.borrow_mut().query_api(&client);
+        if let Err(err) = res {
+            println!("Query Failure: {err:?} for {}", movie.borrow().src.to_string_lossy());
+            continue;
+        }
+        let response = res.unwrap();
+        let status = movie.borrow_mut().process_response(response);
+        if let Err(err) = status {
+            println!("JSON Processing Failure: {err:?} for {}", movie.borrow().src.to_string_lossy());
+            continue;
         }
     }
 
-    let shows = categories.get_mut(1).unwrap().children_mut();
-    for show_node in shows {
-        print!("{}: ", show_node);
-        println!("{}", show_node.children_mut().len());
-        if let catalog_tree::TreeNode::Show{ show, children } = show_node {
-            let res = show.borrow_mut().query_api(&client);
-            if let Err(err) = res {
-                println!("Query Failure: {err:?} for {}", show.borrow().src.to_string_lossy());
-                continue;
+    // Iterate over Shows in the catalog
+    for show in tree.shows {
+        let res = show.borrow_mut().query_api(&client);
+        if let Err(err) = res {
+            println!("Query Failure: {err:?} for {}", show.borrow().src.to_string_lossy());
+            continue;
+        }
+        let response = res.unwrap();
+        let status = show.borrow_mut().process_response(response);
+        if let Err(err) = status {
+            match err {
+                QueryError::FailedToExtractApiData(json) => println!("JSON Processing Failure: {json}"),
+                _                                        => println!("Failed to process API response: {err:?}"),
             }
-            let response = res.unwrap();
-            let status = show.borrow_mut().process_response(response);
-            if let Err(err) = status {
-                match err {
-                    QueryError::FailedToExtractApiData(json) => {
-                        println!("JSON Processing Failure: {json}");
-                    }
-                    _ => {
-                        println!("Failed to process API response: {err:?}");
-                    }
-                }
-                continue;
-            }
-            // println!("{}: {}", show_node, children.len());
-            for child_node in children {
-                if let catalog_tree::TreeNode::Episode(episode) = child_node {
-                    // This is so fucking dumb but I don't want to refactor `Queryable`
-                    let res = reqwest::blocking::get("http://127.0.0.1:13000");
-                    if let Err(err) = res { panic!("Create a dummy webserver on port 13000!"); }
-                    let dummy_response = res.unwrap();
-
-                    let status = episode.borrow_mut().process_response(dummy_response);
-                    if let Err(err) = status {
-                        match err {
-                            _ => {
-                                println!("Failed to process Episode API response: {err:?}");
-                            }
-                        }
-                        continue;
-                    }
-                }
-            }
+            continue;
         }
     }
 

@@ -104,10 +104,11 @@ impl std::fmt::Display for TreeNode {
                 }
             }
             TreeNode::Episode(ep) => {
-                match &ep.borrow().query {
-                    QueryResponse::Episode{show_title, id} => write!(f, "{show_title} {id}"),
-                    QueryResponse::None                    => write!(f, "{}", ep.borrow().src.to_string_lossy()),
-                    _                                      => panic!("Show has invalid query response!")
+                let borrow = ep.borrow();
+                match &borrow.query {
+                    QueryResponse::Episode{show_title} => write!(f, "{} {}", show_title, borrow.id),
+                    QueryResponse::None                => write!(f, "{}", ep.borrow().src.to_string_lossy()),
+                    _                                  => panic!("Show has invalid query response!")
                 }
             }
             TreeNode::Fail{ err, buf } => {
