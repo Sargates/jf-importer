@@ -11,7 +11,6 @@ use urlencoding;
 
 use crate::env::{FileIoError, read_file};
 use crate::media_item::{Movie, Show, Episode, Mappable, MappingError};
-use crate::dir_search::TreeNode;
 
 #[derive(Debug, Clone)]
 pub enum QueryError {

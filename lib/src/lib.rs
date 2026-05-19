@@ -40,6 +40,7 @@ pub mod env;
 pub mod media_item;
 pub mod api_query;
 pub mod dir_search;
+pub mod catalog_tree;
 
 // use crate::env::*;
 // use crate::media_item::*;

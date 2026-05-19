@@ -10,7 +10,7 @@ use std::mem::drop;
 use std::alloc;
 
 use jf_importer::api_query::{QueryError, Queryable};
-use jf_importer::{dir_search, env};
+use jf_importer::{catalog_tree, dir_search, env};
 
 
 //* IMPORTS USED FOR TESTING. THESE SHOULD BE GONE WHEN FINISHED
@@ -20,7 +20,7 @@ use reqwest::blocking::{
     Response,
 };
 
-fn recursive_print(node: &dir_search::TreeNode, old_indent: String) {
+fn recursive_print(node: &catalog_tree::TreeNode, old_indent: String) {
     // `tree` ripoff
     const connector: &'static str = "│   ";
     const middle:    &'static str = "├── ";
@@ -43,7 +43,7 @@ fn recursive_print(node: &dir_search::TreeNode, old_indent: String) {
     }
 
     match &node {
-        dir_search::TreeNode::Root(children) => {
+        catalog_tree::TreeNode::Show {show, children} => {
             for child in children {
                 let mut copy = next_indent.clone();
                 let last = children.last().unwrap();
@@ -54,18 +54,7 @@ fn recursive_print(node: &dir_search::TreeNode, old_indent: String) {
                 recursive_print(child, copy.clone());
             }
         }
-        dir_search::TreeNode::Show {show, children} => {
-            for child in children {
-                let mut copy = next_indent.clone();
-                let last = children.last().unwrap();
-                // ref: https://users.rust-lang.org/t/is-any-way-to-know-references-are-referencing-the-same-object/9716/6
-                if child as *const _ != children.last().unwrap() as *const _ 
-                     { copy += middle; }
-                else { copy += end; }
-                recursive_print(child, copy.clone());
-            }
-        }
-        dir_search::TreeNode::Category { name, children } => {
+        catalog_tree::TreeNode::Category { name, children } => {
             if name == "Failures" { return; }
             for child in children {
                 let mut copy = next_indent.clone();
@@ -93,45 +82,47 @@ fn main() -> () {
         println!("Failed: {:?}", err);
         return;
     }
-    let mut root = res.unwrap();
+    let mut tree = res.unwrap();
 
     println!("Success!");
-    // recursive_print(&root, 0);
+
     println!();
     println!();
     let client = Client::new();
 
     println!("{}", std::env::var("VIDEO_FILE_EXTENTIONS").unwrap());
 
-    let mut categories = root.children_mut();
+    let mut categories = tree.tree.children_mut();
 
     let movies = categories.get_mut(0).unwrap().children_mut();
     for movie in movies {
-        if let dir_search::TreeNode::Movie(movie) = movie {
-            let res = movie.query_api(&client);
+        if let catalog_tree::TreeNode::Movie(movie) = movie {
+            let res = movie.borrow_mut().query_api(&client);
             if let Err(err) = res {
-                println!("Query Failure: {err:?} for {}", movie.src);
+                println!("Query Failure: {err:?} for {}", movie.borrow().src.to_string_lossy());
                 return;
             }
             let response = res.unwrap();
-            let status = movie.process_response(response);
+            let status = movie.borrow_mut().process_response(response);
             if let Err(err) = status {
-                println!("JSON Processing Failure: {err:?} for {}", movie.src);
+                println!("JSON Processing Failure: {err:?} for {}", movie.borrow().src.to_string_lossy());
                 return;
             }
         }
     }
 
     let shows = categories.get_mut(1).unwrap().children_mut();
-    for show in shows {
-        if let dir_search::TreeNode::Show{ show, children } = show {
-            let res = show.query_api(&client);
+    for show_node in shows {
+        print!("{}: ", show_node);
+        println!("{}", show_node.children_mut().len());
+        if let catalog_tree::TreeNode::Show{ show, children } = show_node {
+            let res = show.borrow_mut().query_api(&client);
             if let Err(err) = res {
-                println!("Query Failure: {err:?} for {}", show.src);
+                println!("Query Failure: {err:?} for {}", show.borrow().src.to_string_lossy());
                 continue;
             }
             let response = res.unwrap();
-            let status = show.process_response(response);
+            let status = show.borrow_mut().process_response(response);
             if let Err(err) = status {
                 match err {
                     QueryError::FailedToExtractApiData(json) => {
@@ -143,14 +134,15 @@ fn main() -> () {
                 }
                 continue;
             }
+            // println!("{}: {}", show_node, children.len());
             for child_node in children {
-                if let dir_search::TreeNode::Episode(episode) = child_node {
+                if let catalog_tree::TreeNode::Episode(episode) = child_node {
                     // This is so fucking dumb but I don't want to refactor `Queryable`
                     let res = reqwest::blocking::get("http://127.0.0.1:13000");
                     if let Err(err) = res { panic!("Create a dummy webserver on port 13000!"); }
                     let dummy_response = res.unwrap();
 
-                    let status = episode.process_response(dummy_response);
+                    let status = episode.borrow_mut().process_response(dummy_response);
                     if let Err(err) = status {
                         match err {
                             _ => {
@@ -164,5 +156,5 @@ fn main() -> () {
         }
     }
 
-    recursive_print(&root, String::new());
+    recursive_print(&tree.tree, String::new());
 }

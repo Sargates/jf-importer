@@ -1,55 +1,92 @@
 use std::fmt;
-use std::path::Path;
+use std::rc::Rc;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+
+use regex::Regex;
+
+use crate::dir_search::CreateError;
 use crate::api_query::*;
-
-trait ApiQuery {
-
-}
 
 //# I don't want to have to deal with invalid Movie or Episode objects
 // TODO: Guarantee a Movie/Episode is valid before creating one
-// fn new(path: &str) -> Result(Movie, Self::Error);
-// Check that `new` succeeded and skip if it didn't
 
 #[derive(Debug)]
 pub struct Movie {
-    pub src: String,
+    pub src: PathBuf,
     pub query: QueryResponse
 }
 impl Movie {
-    pub(crate) fn new(src: String) -> Self {
-        Movie {
-            src,
-            query: QueryResponse::None
-        }
+    /// TODO: How does this work for testing? How do we create dummy movies/episodes for testing?
+    pub(crate) fn new(path: PathBuf) -> Result<Self, CreateError> {
+        let opt = path.to_str();
+        if let None = opt   { return Err(CreateError::PathNotUnicode); }
+        if ! path.is_file() { return Err(CreateError::IncorrectFileTypeSupplied); }
+        let src = path;
+        let query = QueryResponse::None;
+        Ok(Movie{ src, query })
     }
 }
 
 #[derive(Debug)]
 pub struct Show {
-    pub src: String, // directory containing show
-    pub query: QueryResponse
+    pub src: PathBuf, // directory containing show
+    pub query: QueryResponse,
+    pub episodes: Vec<Rc<RefCell<Episode>>>,
 }
 impl Show {
-    pub(crate) fn new(src: String) -> Self {
-        Show {
-            src,
-            query: QueryResponse::None
-        }
+    /// Assumes `movies_dir` exists and is structured correctly
+    /// Benefit of doing it this way is that tests are easier to write
+    pub(crate) fn new(path: PathBuf) -> Result<Self, CreateError> {
+        let opt = path.to_str();
+        if let None = opt  { return Err(CreateError::PathNotUnicode); }
+        if ! path.is_dir() { return Err(CreateError::IncorrectFileTypeSupplied) }
+        let src = path;
+        let query = QueryResponse::None;
+        let episodes = vec![];
+        Ok(Show{ src, query, episodes })
     }
 }
 
 #[derive(Debug)]
 pub struct Episode {
-    pub src: String,
+    pub src: PathBuf,
     pub query: QueryResponse,
 }
 impl Episode {
-    pub(crate) fn new(src: String) -> Self {
-        Episode {
-            src,
-            query: QueryResponse::None
+    // Most of this is grandfathered from pre-refactor. This code may be shit
+    pub(crate) fn new(path: PathBuf) -> Result<Self, CreateError> {
+        let opt = path.to_str();
+        if let None = opt   { return Err(CreateError::PathNotUnicode); }
+        if ! path.is_file() { return Err(CreateError::IncorrectFileTypeSupplied); }
+
+        // We know these are good
+        let SE_match_re = Regex::new(r"[sS][0-9]+[eE][0-9]+").unwrap();
+        let SE_number_re = Regex::new(r"[0-9]+").unwrap(); // multipurpose regex for season and episode number
+        let is_match = move |x: &String, re: &Regex| re.is_match(x);
+
+        let file_path = path.to_str().unwrap().to_string();
+
+        // TODO: Support Anime numbering
+        if !SE_match_re.is_match(&file_path) { return Err(CreateError::EpisodeIncorrectFormat); }
+
+        let first_match = SE_match_re.find(&file_path);
+        if first_match.is_none() { return Err(CreateError::EpisodeIncorrectFormat); } // just in case, too lazy to scour docs
+        let episode_ident = first_match.unwrap().as_str();
+
+        if SE_number_re.find_iter(&episode_ident).count() != 2 {
+            return Err(CreateError::EpisodeIncorrectFormat);
         }
+
+        let mut iterator = SE_number_re.find_iter(&episode_ident);
+        let season_num = iterator.next().unwrap().as_str();
+        let episode_num = iterator.next().unwrap().as_str();
+        let episode_string = format!("S{}E{}", season_num, episode_num);
+
+        let src = path;
+        let query = QueryResponse::None;
+
+        Ok(Episode{ src, query })
     }
 }
 
@@ -57,6 +94,7 @@ pub trait Movable {
     type Error;
     /// `move` wave taken :/
     fn relocate(&self) -> Result<(),Self::Error>;
+    fn get_mapped_path(&self) -> Result<PathBuf,Self::Error>;
 }
 
 #[derive(Debug, Clone)]
