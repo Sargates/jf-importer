@@ -36,7 +36,8 @@
 //    How to represent Movies?
 //    Path and info
 
-pub mod env;
+// pub mod env;
+pub mod config;
 pub mod media_item;
 pub mod api_query;
 pub mod dir_search;

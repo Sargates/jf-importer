@@ -4,12 +4,14 @@ use reqwest::blocking::{
     Response,
 };
 
-use std::fs;
+use std::{fs, io};
 use regex::Regex;
-use std::env;
+// use std::env;
 use urlencoding;
 
-use crate::env::{FileIoError, read_file};
+use crate::config::CONFIG;
+use crate::config::SECRETS;
+// use crate::env::FileIoError;
 use crate::media_item::{Movie, Show, Episode, Mappable, MappingError};
 
 #[derive(Debug, Clone)]
@@ -34,6 +36,7 @@ pub enum QueryError {
 
     JsonParseError,
 
+    InvalidApiKey,
     FailedToQueryApi,
     NoSearchResultsFromApi,
     FailedToExtractApiData(String),
@@ -67,6 +70,11 @@ impl From<json::Error> for QueryError {
     }
 }
 
+pub enum FileIoError {
+    FailedToRead(io::Result<String>), // io::error::Error is private, so idk how to define this with the error type
+    FailedToParse,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum QueryResponse {
     Movie {
@@ -93,7 +101,8 @@ pub enum OverrideStatus {
     Overriden(String),
 }
 pub fn check_override(movie: &String) -> Result<OverrideStatus, FileIoError> {
-    let contents = read_file(String::from("manual-fixes.json"))?;
+    let contents = fs::read_to_string(String::from("manual-fixes.json")).map_err(|e| FileIoError::FailedToRead(Err(e)))?;
+
     let json = json::parse(&contents).map_err(|_| FileIoError::FailedToParse)?;
     // eprintln!("{} {} {}", json, movie, json[movie]);
     if json[movie].is_null() { return Ok(OverrideStatus::NotHardcoded); }
@@ -109,34 +118,32 @@ pub trait Queryable {
 impl Queryable for Movie {
     type Error = QueryError;
     fn query_api(&mut self, client: &Client) -> Result<Response, Self::Error> {
-        let omdb_key = env::var("OMDB_APIKEY").map_err(|_| QueryError::UnsetApiKey)?;
+        let omdb_key = SECRETS.clone().TMDB_KEY;
+        if omdb_key.is_empty() { return Err(QueryError::UnsetApiKey) }
 
         // It should be safe to call the first `unwrap` because we never call `query_api` unless
         // `Path::is_file` is true, so `file_stem` should never return `None`. We check that the
         // full filepath is unicode before we ever call `Movie::new` in `create_movie`.
-        let file_name = std::path::Path::new(&self.src).file_stem().unwrap().to_str().unwrap().to_string();
+        let file_stem = self.src.file_stem().unwrap().to_str().unwrap().to_string();
 
         // Need to differentiate between searching with a raw string or by its imdb_id
         let imdb_id_re = Regex::new(r"^tt[0-9]+").unwrap(); // TODO: add error checking to make sure the regex pattern is valid
-
-        let res = check_override(&file_name);
-        let search_param = match res {
-            Err(err) => file_name,
-            Ok(OverrideStatus::NotHardcoded) => file_name,
+        let search_param = match check_override(&file_stem) {
+            Err(err) => file_stem,
+            Ok(OverrideStatus::NotHardcoded) => file_stem,
             Ok(OverrideStatus::Overriden(value)) => value,
         };
 
-        let url;
-        if imdb_id_re.is_match(&search_param) { url = format!("https://www.omdbapi.com/?apikey={}&type=movie&i={}",  omdb_key, search_param); }
-        else                                  { url = format!("https://www.omdbapi.com/?apikey={}&type=movie&s={}*", omdb_key, urlencoding::encode(&search_param)); }
+        let url = if imdb_id_re.is_match(&search_param) { 
+               format!("https://www.omdbapi.com/?apikey={}&type=movie&i={}",  omdb_key, search_param) }
+        else { format!("https://www.omdbapi.com/?apikey={}&type=movie&s={}*", omdb_key, urlencoding::encode(&search_param)) };
         Ok(client.get(&url).send()?)
     }
     fn process_response(&mut self, response: Response) -> Result<(), Self::Error> {
-        // IDMB response
+        // TMDB response
         let year_re = Regex::new(r"^[0-9]+").unwrap();
 
-        let search_term = std::path::Path::new(&self.src).file_stem().unwrap().to_str().unwrap().to_string();
-        // let final_url = res.url().to_string().clone();
+        let search_term = self.src.file_stem().unwrap().to_str().unwrap().to_string();
 
         let raw_json = json::parse(&response.text()?)?;
 
@@ -180,8 +187,10 @@ impl Queryable for Movie {
 impl Queryable for Show {
     type Error = QueryError;
     fn query_api(&mut self, client: &Client) -> Result<Response, Self::Error> {
-        let tmdb_key = env::var("TMDB_READ_ACCESS_TOKEN").map_err(|_| QueryError::UnsetApiKey)?;
-        let search_query = std::path::Path::new(&self.src).file_name().unwrap().to_str().unwrap().to_string();
+        let tmdb_key = SECRETS.clone().TMDB_KEY;
+        if tmdb_key.is_empty() { return Err(QueryError::UnsetApiKey) }
+
+        let search_query = self.src.file_name().unwrap().to_str().unwrap().to_string();
 
         let encoded = urlencoding::encode(&search_query);
         let url = format!("https://api.themoviedb.org/3/search/tv?query={}", encoded);
@@ -194,9 +203,12 @@ impl Queryable for Show {
     fn process_response(&mut self, response: Response) -> Result<(), Self::Error> {
         let year_re = Regex::new(r"^[0-9]+").unwrap();
 
-        let file_name = std::path::Path::new(&self.src).file_name().unwrap().to_str().unwrap().to_string(); 
+        let file_name = self.src.file_name().unwrap().to_str().unwrap().to_string(); 
 
         let raw_json = json::parse(&response.text()?)?;
+        if raw_json["success"].as_bool().unwrap_or(false) {
+            return Err(QueryError::InvalidApiKey);
+        }
         if raw_json["total_results"].as_u64().unwrap_or(0) == 0 {
             //? Rate limiting here?
             // TODO: FITFO
@@ -236,7 +248,7 @@ impl Queryable for Show {
 //     //
 //     //     // TODO: Clean up this shit!
 //     //     // this is duplicated from `create_episode`
-//     //     let path = std::path::Path::new(&self.src);
+//     //     let path = &self.src;
 //     //     let file_path = path.to_str().unwrap().to_string();
 //     //
 //     //     // TODO: Support Anime numbering

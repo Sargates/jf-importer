@@ -60,6 +60,13 @@ pub enum TreeNode {
     },
 }
 impl TreeNode {
+    pub fn children(&self) -> &Vec<TreeNode> {
+        match self {
+            TreeNode::Category{ name, children } => { children }
+            TreeNode::Show{ show, children } => { children }
+            _ => panic!("Expected variant with children")
+        }
+    }
     pub fn children_mut(&mut self) -> &mut Vec<TreeNode> {
         match self {
             TreeNode::Category{ name, children } => { children }
