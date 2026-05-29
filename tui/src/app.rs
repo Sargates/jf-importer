@@ -85,9 +85,9 @@ impl App {
             " Increment ".into(),
             format!("<{}>",KeyCode::Right).blue().bold(),
             " Quit ".into(),
-            format!("<{}>",KeyCode::Char('q')).to_ascii_uppercase().blue().bold(),
+            format!("<{}>",KeyCode::Char('q')).blue().bold(),
             " Load Catalog ".into(),
-            format!("<{}>",KeyCode::Char('p')).to_ascii_uppercase().blue().bold(),
+            format!("<{}>",KeyCode::Char('p')).blue().bold(),
         ]);
 
         let layout = Layout::default()
@@ -125,6 +125,7 @@ impl App {
         tree.render(frame);
     }
     fn handle_events(&mut self) -> io::Result<()> {
+        // switch this to crossterm::event::poll
         match event::read()? {
             // it's important to check that the event is a key press event as
             // crossterm also emits key release and repeat events on Windows.

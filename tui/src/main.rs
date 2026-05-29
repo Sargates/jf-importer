@@ -19,7 +19,7 @@ use ratatui::{
 
 use std::fs;
 
-use jf_import_library::config::*;
+use jf_import_library::{config::*, dir_search};
 
 mod app;
 mod tree_view;
@@ -27,6 +27,15 @@ mod logging;
 
 use app::App;
 use logging::*;
+
+use jf_import_library::api_query::{Queryable, QueryError};
+use jf_import_library::media_item::{Movie, Show, Episode};
+
+use reqwest::blocking::{
+    Client,
+    RequestBuilder,
+    Response,
+};
 
 fn post_init() {
     // Post-init checks
@@ -40,55 +49,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("LOG_FILE: {}", LOG_FILE.clone());
     println!("data_dir: {:?}", get_data_dir());
 
+    println!("{:#?}", CONFIG.clone());
+    println!("{:#?}", SECRETS.clone());
+
     ratatui::run(|terminal| App::default().run(terminal))?;
-    
-    // let file = "Test.toml";
-    // let conf = CONFIG.clone();
-    // let string: String = toml::to_string(&conf).unwrap();
+
+    // let mut tree = match dir_search::generate_catalog_tree() {
+    //     Ok(t) => t,
+    //     Err(err) => { panic!("Failed to create catalog tree! Err: {:?}", err); },
+    // };
     //
-    // if let Err(err) = fs::write(file, string) {
-    //     println!("Failed to write file! Error: {}", err);
-    //     return Ok(());
+    // let client = Client::new();
+    //
+    // // println!("{}", std::env::var("VIDEO_FILE_EXTENTIONS").unwrap());
+    //
+    // // Iterate over Movies in the catalog
+    // for movie in tree.movies {
+    //     let res = movie.borrow_mut().query_api(&client);
+    //     if let Err(err) = res {
+    //         println!("Query Failure: {err:?} for {}", movie.borrow().src.to_string_lossy());
+    //         continue;
+    //     }
+    //     let response = res.unwrap();
+    //     let status = movie.borrow_mut().process_response(response);
+    //     if let Err(err) = status {
+    //         println!("JSON Processing Failure: {err:?} for {}", movie.borrow().src.to_string_lossy());
+    //         continue;
+    //     }
     // }
     //
-    // let content = fs::read_to_string(file).unwrap();
-    // let from_file: Config = toml::from_str(&content).unwrap();
+    // // Iterate over Shows in the catalog
+    // for show in tree.shows {
+    //     let res = show.borrow_mut().query_api(&client);
+    //     if let Err(err) = res {
+    //         println!("Query Failure: {err:?} for {}", show.borrow().src.to_string_lossy());
+    //         continue;
+    //     }
+    //     let response = res.unwrap();
+    //     let status = show.borrow_mut().process_response(response);
+    //     if let Err(err) = status {
+    //         match err {
+    //             QueryError::FailedToExtractApiData(json) => println!("JSON Processing Failure: {json}"),
+    //             _                                        => println!("Failed to process API response: {err:?}"),
+    //         }
+    //         continue;
+    //     }
+    // }
     //
-    // assert!(conf == from_file);
-    // println!("{:#?}", conf);
-
+    // tree_view::recursive_print(&tree.tree, String::new());
+    
     Ok(())
 }
-
-// fn render(frame: &mut Frame) {
-//     let title = Line::from(" Counter App Tutorial ".bold());
-//     let instructions = Line::from(vec![
-//         " Decrement ".into(),
-//         format!("<{}>",KeyCode::Left).blue().bold(),
-//         " Increment ".into(),
-//         format!("<{}>",KeyCode::Right).blue().bold(),
-//         " Quit ".into(),
-//         format!("<{}>",KeyCode::Char('q')).to_ascii_uppercase().blue().bold(),
-//     ]);
-//
-//     let outer_layout = Layout::default()
-//         .direction(layout::Direction::Vertical)
-//         .margin(1)
-//         .constraints(vec![
-//             Constraint::Percentage(50),
-//             Constraint::Percentage(50)])
-//         .split(frame.area());
-//
-//     frame.render_widget(
-//         Paragraph::new("outer 0")
-//         .block(Block::new().bold().fg(Color::Red).borders(Borders::ALL).title_bottom(instructions.clone().centered())),
-//         outer_layout[0]
-//     );
-//     frame.render_widget(
-//         Paragraph::new("outer 1")
-//         .block(Block::new().bold().fg(Color::Yellow).borders(Borders::ALL).title_bottom(instructions.clone().centered()))
-//         ,
-//         outer_layout[1]
-//     );
-// }
 

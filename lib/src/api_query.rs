@@ -118,7 +118,7 @@ pub trait Queryable {
 impl Queryable for Movie {
     type Error = QueryError;
     fn query_api(&mut self, client: &Client) -> Result<Response, Self::Error> {
-        let omdb_key = SECRETS.clone().TMDB_KEY;
+        let omdb_key = SECRETS.clone().OMDB_KEY;
         if omdb_key.is_empty() { return Err(QueryError::UnsetApiKey) }
 
         // It should be safe to call the first `unwrap` because we never call `query_api` unless
@@ -137,10 +137,10 @@ impl Queryable for Movie {
         let url = if imdb_id_re.is_match(&search_param) { 
                format!("https://www.omdbapi.com/?apikey={}&type=movie&i={}",  omdb_key, search_param) }
         else { format!("https://www.omdbapi.com/?apikey={}&type=movie&s={}*", omdb_key, urlencoding::encode(&search_param)) };
+        println!("Movie Url: {url}");
         Ok(client.get(&url).send()?)
     }
     fn process_response(&mut self, response: Response) -> Result<(), Self::Error> {
-        // TMDB response
         let year_re = Regex::new(r"^[0-9]+").unwrap();
 
         let search_term = self.src.file_stem().unwrap().to_str().unwrap().to_string();
@@ -194,6 +194,7 @@ impl Queryable for Show {
 
         let encoded = urlencoding::encode(&search_query);
         let url = format!("https://api.themoviedb.org/3/search/tv?query={}", encoded);
+        println!("Show Url:  {url}");
         let builder = client.get(&url)
             .header("Authorization", format!("Bearer {}", tmdb_key))
             .header("accept", "application/json");
@@ -201,6 +202,7 @@ impl Queryable for Show {
         Ok(builder.send()?)
     }
     fn process_response(&mut self, response: Response) -> Result<(), Self::Error> {
+        // TMDB response
         let year_re = Regex::new(r"^[0-9]+").unwrap();
 
         let file_name = self.src.file_name().unwrap().to_str().unwrap().to_string(); 

@@ -16,10 +16,12 @@ pub struct MillerColumn {
     state: ListState,
 }
 impl MillerColumn {
-    pub fn new(list: Vec<TreeNode>) -> MillerColumn {
+    pub fn new(inner: Vec<TreeNode>) -> MillerColumn {
+        let mut state = ListState::default();
+        if inner.len() > 0 { state.select_next(); }
         MillerColumn {
-            inner: list,
-            state: ListState::default()
+            inner,
+            state
         }
     }
     pub fn next(&mut self) { self.state.select_next(); }

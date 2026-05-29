@@ -17,7 +17,7 @@ use crate::app::Renderable;
 
 use self::miller_columns::MillerColumn;
 
-fn recursive_print(node: &catalog_tree::TreeNode, old_indent: String) {
+pub fn recursive_print(node: &catalog_tree::TreeNode, old_indent: String) {
     // `tree` ripoff
     const connector: &'static str = "│   ";
     const middle:    &'static str = "├── ";

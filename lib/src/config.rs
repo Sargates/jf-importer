@@ -177,7 +177,7 @@ impl Secrets {
         };
 
         let mut secrets = match toml::from_str::<Secrets>(&content) {
-            Err(err) => Err(ConfigLoadError::FailedToDeserialize).into(),
+            Err(err) => return Err(ConfigLoadError::FailedToDeserialize).into(),
             Ok(cfg) => cfg
         };
         secrets.load_error = ConfigLoadError::Success;
