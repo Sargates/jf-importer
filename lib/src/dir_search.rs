@@ -5,10 +5,13 @@ use std::env;
 use std::ffi::OsString;
 use regex::Regex;
 use std::path::{ Path, PathBuf };
-use std::rc::Rc;
-use std::cell::RefCell;
+use std::sync::{Arc, Weak};
 
-use crate::api_query::{ Queryable, QueryResponse };
+use tokio::sync::Mutex;
+use futures::executor::block_on;
+
+use crate::api::QueryResponse;
+// use crate::api_query::{ Queryable, QueryResponse };
 use crate::media_item::{ Movie, Show, Episode, Mappable };
 use crate::catalog_tree::{CatalogTree, TreeGenError, TreeNode};
 use crate::config::{Config,CONFIG,Secrets,SECRETS};
@@ -85,7 +88,7 @@ pub fn generate_catalog_tree() -> Result<CatalogTree, TreeGenError> {
             continue;
         }
         let movie = create_result.unwrap();
-        movies.push(Rc::new(RefCell::new(movie)));
+        movies.push(Arc::new(Mutex::new(movie)));
     }
     drop(builder);
 
@@ -116,13 +119,15 @@ pub fn generate_catalog_tree() -> Result<CatalogTree, TreeGenError> {
             continue;
         }
         let show = create_result.unwrap();
-        shows.push(Rc::new(RefCell::new(show)));
+        shows.push(Arc::new(Mutex::new(show)));
     }
     drop(builder);
 
     for show in shows.iter_mut() {
         // println!("Processing Show: {}", &show.borrow().src.to_string_lossy());
-        let mut builder = WalkBuilder::new(&show.borrow().src);
+        let mut guard = block_on(show.lock());
+        let mut builder = WalkBuilder::new(&guard.src);
+        // drop(guard);
         builder.min_depth(Some(1))
             .sort_by_file_path(|a, b| a.cmp(b)); // a < b
         for result in builder.build() {
@@ -138,7 +143,7 @@ pub fn generate_catalog_tree() -> Result<CatalogTree, TreeGenError> {
             let dir_entry = result.unwrap();
             if ! dir_entry.path().is_file() { continue; } // skip directories
 
-            let create_result = Episode::new(dir_entry.path().to_path_buf());
+            let create_result = Episode::new(dir_entry.path().to_path_buf(), Arc::downgrade(show));
             if let Err(err) = create_result {
                 let fails = fails_cat.children_mut();
                 let buf = dir_entry.path().to_path_buf();
@@ -146,7 +151,7 @@ pub fn generate_catalog_tree() -> Result<CatalogTree, TreeGenError> {
                 continue;
             }
             let episode = create_result.unwrap();
-            show.borrow_mut().episodes.push(Rc::new(RefCell::new(episode)));
+            guard.episodes.push(Arc::new(Mutex::new(episode)));
         }
     }
 
@@ -156,10 +161,13 @@ pub fn generate_catalog_tree() -> Result<CatalogTree, TreeGenError> {
 
     for show_box in shows.iter() {
         let show = show_box.clone();
+        let guard = block_on(show.lock());
+        let mut builder = WalkBuilder::new(&guard.src);
         let mut children = vec![];
-        for episode in show.borrow().episodes.iter() {
+        for episode in guard.episodes.iter() {
             children.push(TreeNode::Episode(episode.clone()));
         }
+        drop(guard);
         shows_cat.push_child(TreeNode::Show { show, children });
     }
 

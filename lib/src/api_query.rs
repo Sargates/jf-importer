@@ -14,62 +14,6 @@ use crate::config::SECRETS;
 // use crate::env::FileIoError;
 use crate::media_item::{Movie, Show, Episode, Mappable, MappingError};
 
-#[derive(Debug, Clone)]
-pub enum QueryError {
-    /// For TreeNode variants that aren't Movie, Show, Episode
-    CantQueryOnType, 
-
-    /// Could be VarError::NotPresent or VarError::NotUnicode
-    UnsetApiKey,
-
-    /// Mappings from `reqwest::Error`
-    ReqwestBuilder,
-    ReqwestRedirect,
-    ReqwestStatus,
-    ReqwestTimeout,
-    ReqwestRequest,
-    ReqwestConnect,
-    ReqwestBody,
-    ReqwestDecode,
-    ReqwestUpgrade,
-    ReqwestUnknown,
-
-    JsonParseError,
-
-    InvalidApiKey,
-    FailedToQueryApi,
-    NoSearchResultsFromApi,
-    FailedToExtractApiData(String),
-    // TODO: Reference actual API responses
-    //? Create unified enum for different APIs?
-}
-impl From<reqwest::Error> for QueryError {
-    fn from(value: reqwest::Error) -> Self {
-        if      value.is_builder()  { QueryError::ReqwestBuilder  }
-        else if value.is_redirect() { QueryError::ReqwestRedirect } 
-        else if value.is_status()   { QueryError::ReqwestStatus  } 
-        else if value.is_timeout()  { QueryError::ReqwestTimeout  } 
-        else if value.is_request()  { QueryError::ReqwestRequest  } 
-        else if value.is_connect()  { QueryError::ReqwestConnect  } 
-        else if value.is_body()     { QueryError::ReqwestBody     } 
-        else if value.is_decode()   { QueryError::ReqwestDecode   } 
-        else if value.is_upgrade()  { QueryError::ReqwestUpgrade } 
-        else                        { QueryError::ReqwestUnknown }
-    }
-}
-impl From<json::Error> for QueryError {
-    fn from(value: json::Error) -> Self {
-
-        QueryError::JsonParseError
-        // UnexpectedCharacter { ch, line, column },
-        // UnexpectedEndOfJson,
-        // ExceededDepthLimit,
-        // FailedUtf8Parsing,
-        // WrongType(String),
-        // todo!()
-    }
-}
-
 pub enum FileIoError {
     FailedToRead(io::Result<String>), // io::error::Error is private, so idk how to define this with the error type
     FailedToParse,

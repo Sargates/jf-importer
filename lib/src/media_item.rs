@@ -1,20 +1,29 @@
 use std::fmt;
-use std::rc::Rc;
-use std::cell::RefCell;
+use std::sync::{Arc,Weak};
 use std::path::{Path, PathBuf};
+
+use tokio::sync::Mutex;
+use futures::executor::block_on;
 
 use regex::Regex;
 
 use crate::dir_search::CreateError;
-use crate::api_query::*;
+// use crate::api_query::*;
+use crate::api::QueryResponse;
 
 //# I don't want to have to deal with invalid Movie or Episode objects
 // TODO: Guarantee a Movie/Episode is valid before creating one
 
+pub enum MediaItem {
+    Movie(Arc<Mutex<Movie>>),
+    Show(Arc<Mutex<Show>>),
+    Episode(Arc<Mutex<Episode>>),
+}
+
 #[derive(Debug)]
 pub struct Movie {
     pub src: PathBuf,
-    pub query: QueryResponse
+    pub query: Option<QueryResponse>,
 }
 impl Movie {
     /// TODO: How does this work for testing? How do we create dummy movies/episodes for testing?
@@ -23,7 +32,7 @@ impl Movie {
         if let None = opt   { return Err(CreateError::PathNotUnicode); }
         if ! path.is_file() { return Err(CreateError::IncorrectFileTypeSupplied); }
         let src = path;
-        let query = QueryResponse::None;
+        let query = None;
         Ok(Movie{ src, query })
     }
 }
@@ -31,8 +40,8 @@ impl Movie {
 #[derive(Debug)]
 pub struct Show {
     pub src: PathBuf, // directory containing show
-    pub query: QueryResponse,
-    pub episodes: Vec<Rc<RefCell<Episode>>>,
+    pub query: Option<QueryResponse>,
+    pub episodes: Vec<Arc<Mutex<Episode>>>,
 }
 impl Show {
     /// Assumes `movies_dir` exists and is structured correctly
@@ -42,7 +51,7 @@ impl Show {
         if let None = opt  { return Err(CreateError::PathNotUnicode); }
         if ! path.is_dir() { return Err(CreateError::IncorrectFileTypeSupplied) }
         let src = path;
-        let query = QueryResponse::None;
+        let query = None;
         let episodes = vec![];
         Ok(Show{ src, query, episodes })
     }
@@ -72,11 +81,12 @@ impl Into<String> for EpisodeId {
 pub struct Episode {
     pub src: PathBuf,
     pub id: EpisodeId,
-    pub query: QueryResponse,
+    pub parent: Weak<Mutex<Show>>,
+    pub query: Option<QueryResponse>,
 }
 impl Episode {
     // Most of this is grandfathered from pre-refactor. This code may be shit
-    pub(crate) fn new(path: PathBuf) -> Result<Self, CreateError> {
+    pub(crate) fn new(path: PathBuf, parent: Weak<Mutex<Show>>) -> Result<Self, CreateError> {
         let opt = path.to_str();
         if let None = opt   { return Err(CreateError::PathNotUnicode); }
         if ! path.is_file() { return Err(CreateError::IncorrectFileTypeSupplied); }
@@ -105,9 +115,9 @@ impl Episode {
 
         let src = path;
         let id = EpisodeId::Traditional { season, episode };
-        let query = QueryResponse::None;
+        let query = None;
 
-        Ok(Episode{ src, id, query })
+        Ok(Episode{ src, id, query, parent })
     }
 }
 

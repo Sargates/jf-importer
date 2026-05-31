@@ -36,16 +36,9 @@
 //    How to represent Movies?
 //    Path and info
 
-// pub mod env;
 pub mod config;
 pub mod media_item;
-pub mod api_query;
+pub mod api;
 pub mod dir_search;
 pub mod catalog_tree;
 
-// use crate::env::*;
-// use crate::media_item::*;
-// use crate::api_query::*;
-// use crate::dir_search::*;
-//
-// use dir_search::generate_catalog_tree;

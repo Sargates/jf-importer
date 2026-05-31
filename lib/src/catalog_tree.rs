@@ -1,16 +1,20 @@
 use std::path::PathBuf;
 use std::ffi::OsString;
 use std::env;
-use std::rc::Rc;
+use std::sync::{Arc, Weak};
 use std::cell::RefCell;
 
+use tokio::sync::Mutex;
+use futures::executor::block_on;
+
 use crate::media_item::{Movie, Show, Episode};
-use crate::api_query::QueryResponse;
+// use crate::api_query::QueryResponse;
+use crate::api::QueryResponse;
 use crate::dir_search::CreateError;
 
 pub struct CatalogTree {
-    pub movies: Vec<Rc<RefCell<Movie>>>,
-    pub shows: Vec<Rc<RefCell<Show>>>,
+    pub movies: Vec<Arc<Mutex<Movie>>>,
+    pub shows: Vec<Arc<Mutex<Show>>>,
     pub tree: TreeNode
 }
 
@@ -48,12 +52,12 @@ pub enum TreeNode {
         name: String,
         children: Vec<TreeNode>
     },
-    Movie(Rc<RefCell<Movie>>),
+    Movie(Arc<Mutex<Movie>>),
     Show {
-        show: Rc<RefCell<Show>>,
+        show: Arc<Mutex<Show>>,
         children: Vec<TreeNode>
     },
-    Episode(Rc<RefCell<Episode>>),
+    Episode(Arc<Mutex<Episode>>),
     Fail {
         err: CreateError,
         buf: PathBuf
@@ -83,39 +87,68 @@ impl TreeNode {
     }
     pub fn is_queried(&self) -> bool {
         match self {
-            TreeNode::Show{ show, .. } => show.borrow().query    != QueryResponse::None,
-            TreeNode::Movie(movie)     => movie.borrow().query   != QueryResponse::None,
-            TreeNode::Episode(episode) => episode.borrow().query != QueryResponse::None,
+            TreeNode::Show{ show, .. } => block_on(show.lock()).query    != None,
+            TreeNode::Movie(movie)     => block_on(movie.lock()).query   != None,
+            TreeNode::Episode(episode) => block_on(episode.lock()).query != None,
             _                          => panic!("Expected Movie, Show, or Episode!")
         }
     }
 }
 impl std::fmt::Display for TreeNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // writeln!(f, "Printing: {:?}", self);
         match self {
             TreeNode::Category{ name, children } => {
                 write!(f, "{name}")
             }
             TreeNode::Show{ show, children } => {
-                match &show.borrow().query {
-                    QueryResponse::Show{title, start_year, tmdb} => write!(f, "{title} ({start_year}) [tmdbid-{tmdb}]"),
-                    QueryResponse::None                          => write!(f, "{}", show.borrow().src.to_string_lossy()),
-                    _                                            => panic!("Show has invalid query response!")
+                match show.try_lock() {
+                    Ok(guard) => {
+                        match &guard.query {
+                            Some(response) => {
+                                write!(f, "{} ({}) ", response.title, response.year);
+                                if let Some(imdb) = &response.imdb {
+                                       write!(f, "[imdbid-{}]", imdb) } 
+                                else { write!(f, "[tmdbid-{}]", response.tmdb) }
+                            }
+                            None => write!(f, "{}", guard.src.to_string_lossy()),
+                        }
+                    }
+                    Err(err) => write!(f, "Failed to get lock for Episode! Error: {:?}", err)
                 }
             }
             TreeNode::Movie(movie) => {
-                match &movie.borrow().query {
-                    QueryResponse::Movie{title, year, imdb} => write!(f, "{title} ({year}) [imdbid-{imdb}]"),
-                    QueryResponse::None                     => write!(f, "{}", movie.borrow().src.to_string_lossy()),
-                    _                                       => panic!("Show has invalid query response!")
+                match movie.try_lock() {
+                    Ok(guard) => {
+                        match &guard.query {
+                            Some(response) => {
+                                write!(f, "{} ({}) ", response.title, response.year);
+                                if let Some(imdb) = &response.imdb {
+                                    write!(f, "[imdbid-{}]", imdb) } 
+                                else { write!(f, "[tmdbid-{}]", response.tmdb) }
+                            }
+                            None => write!(f, "{}", guard.src.to_string_lossy()),
+                        }
+                    }
+                    Err(err) => write!(f, "Failed to get lock for Episode! Error: {:?}", err)
                 }
             }
             TreeNode::Episode(ep) => {
-                let borrow = ep.borrow();
-                match &borrow.query {
-                    QueryResponse::Episode{show_title} => write!(f, "{} {}", show_title, borrow.id),
-                    QueryResponse::None                => write!(f, "{}", ep.borrow().src.to_string_lossy()),
-                    _                                  => panic!("Show has invalid query response!")
+                // I used to get deadlock if I used `block_on(ep.lock())`, but doing it this way is better 
+                // because there shouldn't be any risk of deadlocking in synchronous code.
+                match ep.try_lock() {
+                    Ok(guard) => {
+                        match (&guard.query, Weak::upgrade(&guard.parent).unwrap().try_lock()) {
+                            (_, Ok(parent_guard)) 
+                                if parent_guard.query.is_some() => write!(f, "{} {}", parent_guard.query.as_ref().unwrap().title.clone(), guard.id),
+                            (_, Ok(parent_guard)) 
+                                if parent_guard.query.is_none() => write!(f, "Parent query is empty: {}", guard.src.to_string_lossy()),
+                            (_, Err(err)        )               => write!(f, "Failed to get Parent Lock: {}", guard.src.to_string_lossy()),
+                            _                                   => unreachable!()
+                        }
+                    }
+                    Err(err) => write!(f, "Failed to get lock for Episode! Error: {:?}", err)
+
                 }
             }
             TreeNode::Fail{ err, buf } => {
