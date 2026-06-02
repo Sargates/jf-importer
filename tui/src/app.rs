@@ -66,29 +66,25 @@ pub struct App {
     exit: bool,
 }
 impl App {
-    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+    pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         tracing::info!("Starting!!");
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
-            block_on(
-                async {
-                    select! {
-                        res = self.update() => {
-                            match res {
-                                Ok(_) => { /* tracing::info!("No error during update!"); */ },
-                                Err(e) => { tracing::error!("An error occured: Error: {:?}", e); }
-                            }
-                        }
-                        //* I think putting a timeout in this outer `select!` can cause a race condition by 
-                        //* the timeout trashing whatever work is being done in `update`
-                        // _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
-                        //     tracing::debug!("Timed out waiting for update");
-                        //     // self.exit = true;
-                        // }
+            select! {
+                res = self.update() => {
+                    match res {
+                        Ok(_) => { /* tracing::info!("No error during update!"); */ },
+                        Err(e) => { tracing::error!("An error occured: Error: {:?}", e); }
                     }
                 }
-            )
+                //* I think putting a timeout in this outer `select!` can cause a race condition by 
+                //* the timeout trashing whatever work is being done in `update`
+                // _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
+                //     tracing::debug!("Timed out waiting for update");
+                //     // self.exit = true;
+                // }
+            }
             // tracing::info!("Async block finished");
         }
         Ok(())

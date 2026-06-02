@@ -44,16 +44,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("CONFIG.clone(): {:#?}", CONFIG.clone());
     println!("SECRETS.clone(): {:#?}", SECRETS.clone());
     
-    // // ratatui::run expects a synchronous closure, this is just ripped from `ratatui::run` and
-    // // changed to move `terminal` since it isn't used elsewhere
-    // let mut terminal = ratatui::init();
-    // let f = || async move {
-    //     let result = App::default().run(&mut terminal).await;
-    // };
-    // f().await;
-    // ratatui::restore();
+    // ratatui::run expects a synchronous closure, this is just ripped from `ratatui::run` and
+    // changed to move `terminal` since it isn't used elsewhere
+    let mut terminal = ratatui::init();
+    let f = || async move {
+        let result = App::default().run(&mut terminal).await;
+    };
+    f().await;
+    ratatui::restore();
     
-    ratatui::run(|terminal| App::default().run(terminal))?;
+    // ratatui::run(|terminal| App::default().run(terminal))?;
     
     // let mut tree = match dir_search::generate_catalog_tree() {
     //     Ok(t) => t,
