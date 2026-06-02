@@ -1,4 +1,9 @@
 /target
 .env
 .data
-writeup # while in progress
+
+# while in progress
+writeup
+
+# development notes because my brain is unorganized
+notes
