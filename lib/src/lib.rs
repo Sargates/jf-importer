@@ -39,6 +39,5 @@
 pub mod config;
 pub mod media_item;
 pub mod api;
-pub mod dir_search;
-pub mod catalog_tree;
+pub mod media_catalog;
 

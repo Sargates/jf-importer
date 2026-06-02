@@ -35,7 +35,7 @@ pub enum QueryError {
 
     /// HTTP 429, see https://developer.themoviedb.org/docs/rate-limiting
     /// There isn't actually any respecting of this quite yet.
-    /// TODO: Respect this response
+    // TODO: Respect this response
     TMDBTooManyRequests, 
 
     InvalidApiKey,
@@ -68,20 +68,22 @@ impl From<serde_json::Error> for QueryError {
 }
 
 /// Abstracted out response object. Only the things we care about (for now)
+// TODO: make these `pub(crate)`
 #[derive(Debug, PartialEq)]
 pub struct QueryResponse {
     pub title: String,
     pub year: u32,
     pub imdb: Option<String>,
-    pub tmdb: String,
+
+    /// (Currently) The TMDB of the item that owns the response.
+    // TODO: Make this `enum ApiSpecificId { TMDB(String), OMDB(String) }`
+    pub tmdb: String, 
 }
 
+// GLORIOUS CRATE!!!
 #[async_trait]
 pub trait ApiClient {
     // fn semaphore_req() -> impl std::future::Future<Output = >
     async fn search_movie(&self, movie: Arc<Mutex<Movie>>) -> Result<(), QueryError>;
     async fn search_show(&self, show: Arc<Mutex<Show>>) -> Result<(), QueryError>;
-
-    // TODO: How to tell whether the response is a show or movie?
-    // fn search_id() -> ();
 }

@@ -7,17 +7,19 @@ use futures::executor::block_on;
 
 use regex::Regex;
 
-use crate::dir_search::CreateError;
-// use crate::api_query::*;
 use crate::api::QueryResponse;
+use crate::media_catalog::{TreeNode, CreateError};
 
-//# I don't want to have to deal with invalid Movie or Episode objects
-// TODO: Guarantee a Movie/Episode is valid before creating one
-
+#[derive(Debug, Clone)]
 pub enum MediaItem {
     Movie(Arc<Mutex<Movie>>),
     Show(Arc<Mutex<Show>>),
     Episode(Arc<Mutex<Episode>>),
+}
+
+pub enum QueryStatus {
+    Failed,
+    InProgress
 }
 
 #[derive(Debug)]
@@ -26,7 +28,7 @@ pub struct Movie {
     pub query: Option<QueryResponse>,
 }
 impl Movie {
-    /// TODO: How does this work for testing? How do we create dummy movies/episodes for testing?
+    // TODO: How does this work for testing? How do we create dummy movies/episodes for testing?
     pub(crate) fn new(path: PathBuf) -> Result<Self, CreateError> {
         let opt = path.to_str();
         if let None = opt   { return Err(CreateError::PathNotUnicode); }
@@ -123,7 +125,7 @@ impl Episode {
 
 pub trait Movable {
     type Error;
-    /// `move` wave taken :/
+    // `move` wave taken :/
     fn relocate(&self) -> Result<(),Self::Error>;
     fn get_mapped_path(&self) -> Result<PathBuf,Self::Error>;
 }

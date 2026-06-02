@@ -1,21 +1,28 @@
-use std::io;
+use std::{io, time::Duration};
+use std::rc::Rc;
+
 use crossterm::{
     event::{self, KeyEventKind, KeyCode, Event, KeyEvent},
 };
-use ratatui::style::Stylize;
+use futures::FutureExt;
 use ratatui::{
     *,
     layout::*,
     text::Line,
     widgets::*,
-    style::Color
+    style::{Color,Stylize}
 };
 
-use jf_import_library::{catalog_tree::TreeGenError, config::{CONFIG, ConfigLoadError}};
+use jf_import_library::{
+    media_catalog::{self, TreeGenError, MediaCatalog},
+    config::{CONFIG, ConfigLoadError},
+};
+use tokio::{self, select, sync::watch};
+use futures::executor::block_on;
 
-use crate::tree_view::{self, TreeView};
+use crate::widgets::{self, TreeView, GeneratingView, error::*};
 use crate::logging::*;
-use crate::trace_dbg;
+// use crate::trace_dbg;
 
 pub trait Renderable {
     fn render(&mut self, frame: &mut ratatui::Frame);
@@ -26,7 +33,8 @@ pub trait Renderable {
 enum ErrorCatch {
     #[default]
     NoError,
-    FailedToGenerateTree(TreeGenError)
+    FailedToGenerateTree(TreeGenError),
+    AppUpdateError(AppUpdateError)
 }
 impl PartialEq for ErrorCatch {
     fn eq(&self, other: &Self) -> bool {
@@ -35,30 +43,83 @@ impl PartialEq for ErrorCatch {
         }
     }
 }
+
+#[derive(Debug)]
+enum AppUpdateError {
+    ChannelRecvError(watch::error::RecvError),
+    GeneratingViewError(GeneratingViewError),
+    TreeViewError(TreeViewError),
+}
+
 #[derive(Default)]
 enum AppState {
     #[default]
     Postinit,
-    TreeView(tree_view::TreeView)
+    GeneratingTree(GeneratingView),
+    MillerColumnView(TreeView)
 }
 #[derive(Default)]
 pub struct App {
+    tree: Option<Rc<MediaCatalog>>,
     state: AppState,
     error: ErrorCatch,
     exit: bool,
 }
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+        tracing::info!("Starting!!");
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
+            block_on(
+                async {
+                    select! {
+                        res = self.update() => {
+                            match res {
+                                Ok(_) => { /* tracing::info!("No error during update!"); */ },
+                                Err(e) => { tracing::error!("An error occured: Error: {:?}", e); }
+                            }
+                        }
+                        //* I think putting a timeout in this outer `select!` can cause a race condition by 
+                        //* the timeout trashing whatever work is being done in `update`
+                        // _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
+                        //     tracing::debug!("Timed out waiting for update");
+                        //     // self.exit = true;
+                        // }
+                    }
+                }
+            )
+            // tracing::info!("Async block finished");
         }
         Ok(())
+    }
+    async fn update(&mut self) -> Result<(), AppUpdateError> {
+        match &mut self.state {
+            AppState::GeneratingTree(view) => {
+                if view.is_complete() {
+                    tracing::info!("View is completed!");
+                    let ptr = Rc::new(view.take().unwrap());
+                    let tree_view = TreeView::new(ptr.clone()).map_err(|e| AppUpdateError::TreeViewError(e))?;
+                    self.tree = Some(ptr);
+                    self.state = AppState::MillerColumnView(tree_view);
+                    return Ok(())
+                }
+                
+                // tracing::info!("Awaiting update");
+                match view.poll().await {
+                    Ok(_) => {},
+                    Err(err) => { Err(AppUpdateError::GeneratingViewError(err))?; }
+                }
+            }
+            _ => {}
+        }
+        Ok(futures::future::ready(()).await)
     }
     fn draw(&mut self, frame: &mut Frame) {
         match &mut self.state {
             AppState::Postinit => self.post_init(frame),
-            AppState::TreeView(view) => view.render(frame)
+            AppState::GeneratingTree(view) => view.render(frame),
+            AppState::MillerColumnView(view) => view.render(frame),
         }
         if self.error != ErrorCatch::NoError {
             let popup_block = Block::bordered().title("An Error Occured!");
@@ -87,7 +148,7 @@ impl App {
             " Quit ".into(),
             format!("<{}>",KeyCode::Char('q')).blue().bold(),
             " Load Catalog ".into(),
-            format!("<{}>",KeyCode::Char('p')).blue().bold(),
+            format!("<{}> ",KeyCode::Char('p')).blue().bold(),
         ]);
 
         let layout = Layout::default()
@@ -114,26 +175,26 @@ impl App {
 
             frame.render_widget(Clear, float);
             let paragraph = Paragraph::new(
-                format!("We failed to load your configuration and had to revert to the default.\nError: {:?}\n{:#?}", CONFIG.load_error, CONFIG.clone()))
+                format!("I failed to load your configuration and had to revert to the default.\nError: {:?}\n{:#?}", CONFIG.load_error, CONFIG.clone()))
                 .bold()
                 .fg(Color::Red)
                 .block(popup_block);
             frame.render_widget(paragraph, float);
         }
     }
-    fn render_tree_view(&mut self, tree: &mut TreeView, frame: &mut Frame) {
-        tree.render(frame);
-    }
     fn handle_events(&mut self) -> io::Result<()> {
         // switch this to crossterm::event::poll
-        match event::read()? {
-            // it's important to check that the event is a key press event as
-            // crossterm also emits key release and repeat events on Windows.
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                self.handle_key_event(key_event)
+        if event::poll(Duration::from_millis(0))? {
+            match event::read()? {
+                // it's important to check that the event is a key press event as
+                // crossterm also emits key release and repeat events on Windows.
+                Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+                    self.handle_key_event(key_event)
+                }
+                _ => {}
             }
-            _ => {}
-        };
+        }
+
         Ok(())
     }
     fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -141,25 +202,20 @@ impl App {
             KeyCode::Char('q') => {
                 if CONFIG.load_error != ConfigLoadError::Success {
                     if let Err(e) = CONFIG.clone().write_to_file() {
-                        trace_dbg!("Failed to write config!");
+                        tracing::error!("Failed to write config!");
                     }
                 }
                 self.exit()
             }
             KeyCode::Char('p') => {
-                let tree = match TreeView::new() {
-                    Ok(tree) => tree,
-                    Err(err) => {
-                        self.error = ErrorCatch::FailedToGenerateTree(err);
-                        return;
-                    }
-                };
-                self.state = AppState::TreeView(tree);
+                let res = GeneratingView::new();
+                self.state = AppState::GeneratingTree(res)
             }
             _ => {
                 match &mut self.state {
                     AppState::Postinit => {},
-                    AppState::TreeView(view) => view.handle_input(key_event.code)
+                    AppState::GeneratingTree(view) => {}, // no user input
+                    AppState::MillerColumnView(view) => view.handle_input(key_event.code)
                 }
             }
         }
