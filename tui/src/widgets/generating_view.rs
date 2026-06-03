@@ -1,17 +1,17 @@
-use futures::FutureExt;
 use ratatui::{
-    *,
-    layout::*,
-    text::Line,
-    widgets::*,
-    style::{Color,Stylize}
+    buffer::Buffer, 
+    layout::*, 
+    style::{Color,Stylize}, 
+    text::Line, 
+    widgets::*, 
+    *
 };
-
-use std::sync::Arc;
 
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::select;
+
+use std::cell::RefCell;
 
 use jf_import_library::api::QueryError;
 use jf_import_library::media_catalog::{MediaCatalog, TreeGenError, TreeNode};
@@ -20,7 +20,6 @@ use jf_import_library::media_catalog;
 use jf_import_library::config::*;
 
 use crate::app::Renderable;
-// use crate::trace_dbg;
 
 #[derive(Debug)]
 pub enum GeneratingViewError {
@@ -33,8 +32,11 @@ pub enum GeneratingViewError {
 pub struct GeneratingView {
     thread_handle: JoinHandle<Result<MediaCatalog, TreeGenError>>,
     subscriber: watch::Receiver<String>,
-    last: String,
     completed: Option<MediaCatalog>,
+
+    last: (String, String),
+    buffer: RefCell<Option<Buffer>>
+    
 }
 impl GeneratingView {
     pub fn new() -> GeneratingView {
@@ -49,8 +51,9 @@ impl GeneratingView {
         GeneratingView {
             thread_handle,
             subscriber,
-            last: format!("Unset"),
+            last: (format!("Unset Previous"), format!("Unset")),
             completed: None,
+            buffer: RefCell::new(None)
         }
     }
     pub async fn poll(&mut self) -> Result<(), GeneratingViewError> {
@@ -76,10 +79,10 @@ impl GeneratingView {
                     Ok(()) => {
                         let message = self.subscriber.borrow_and_update().to_string();
                         tracing::info!("[] Message Received from : {}", message);
-                        self.last=message; 
+                        self.last=(self.last.1.clone(), message); 
                     }
                     Err(e) => {
-                        tracing::info!("NOW YOU SEE ME: {:?}", e);
+                        tracing::info!("[] Error when receiving from channel: {:?}", e);
                         Err(e).map_err(|e| GeneratingViewError::RecvError(e))?;
                     }
                 }
@@ -95,19 +98,65 @@ impl Renderable for GeneratingView {
     fn render(&mut self, frame: &mut ratatui::Frame)
     where
         Self: Sized {
+        let mut borrow_mut = self.buffer.borrow_mut();
+        let mut buffer = match borrow_mut.take() {
+            Some(buffer) => buffer,
+            None => {
+                let [_, rect] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .areas(frame.area());
+                let [_, rect] = Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)])
+                    .areas(rect);
+                Buffer::empty(rect)
+            }
+        };
+
+        // paths are unique, so messages from the MediaCatalogBuilder are too. this is 
+        // just to prevent messy output that a user may notice due to slower crawling
+        if self.last.0 == self.last.1 { return; }
         
         let popup_block = Block::bordered().title(" Generating Media Catalog ");
-        let float = frame.area().centered(Constraint::Percentage(60), Constraint::Percentage(20));
+        let mut new_inner = {
+            // we take the lines `1..N`, dropping the 0th line, and pad the end of the buffer so it's the right size.
+            // ratatui doesn't expose any helpful way to intersect two buffers. `Buffer::merge` just unions two 
+            // of them together and exposes no other methods of boolean-ing them together, so there's no way 
+            // to be clever about doing this
+            let no_border = popup_block.inner(buffer.area);
+            let mut dummy = buffer.clone();
+            dummy.resize(no_border);
+            let mut iter = dummy.content.into_iter();
+            let mut out = Buffer::empty(no_border);
 
-        Widget::render(Clear, float, frame.buffer_mut());
+            let size = no_border.clone().as_size();
+            let position = no_border.clone().as_size();
+            out.content = iter
+                .skip(size.width.into())
+                .collect();
+            out.content.extend(Buffer::empty(Rect::new(1,1, size.width, 1)).content);
+            out
+        };
+        // assert_eq!(popup_block.inner(buffer.area), new_inner.area);
 
-        let paragraph = Paragraph::new(format!("{}", self.last))
+        Widget::render(Clear, buffer.area, frame.buffer_mut());
+        let dummy = Paragraph::new("")
             .bold()
             .fg(Color::Green)
-            .block(popup_block)
-            .centered()
-        ;
-        Widget::render(paragraph, float, frame.buffer_mut());
+            .block(popup_block.clone());
+        Widget::render(dummy, buffer.area, frame.buffer_mut());
+
+        let paragraph = Paragraph::new(format!("{}", self.last.1))
+            .bold()
+            .fg(Color::Green);
+        let size = new_inner.area.clone().as_size();
+        let pos = new_inner.area.clone().as_position();
+        let write_area = Rect::new(pos.x, pos.y+size.height-1, size.width, 1); // last line of buffer
+        Widget::render(paragraph, write_area, &mut new_inner);            // render paragraph to last line of buffer
+        tracing::info!("new_inner:\n{:?}", new_inner);
+        frame.buffer_mut().merge(&new_inner);
+
+        // need to re-create a buffer of the original size so that we 
+        // don't recursively make the buffer smaller and smaller
+        new_inner.resize(buffer.area().clone());
+        *borrow_mut = Some(new_inner);
     }
 
     fn handle_input(&mut self, key: crossterm::event::KeyCode) {}

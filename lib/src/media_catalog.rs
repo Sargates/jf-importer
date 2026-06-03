@@ -14,6 +14,8 @@ use crate::media_item::{MediaItem, Movie, Show, Episode};
 use crate::api::QueryResponse;
 use crate::config::{Config,CONFIG,Secrets,SECRETS};
 
+
+
 pub struct MediaCatalog {
     pub config: Config,
     pub movies: Vec<Arc<Mutex<Movie>>>,
@@ -30,6 +32,26 @@ pub enum CreateError {
     IncorrectFileTypeSupplied,
     EpisodeIncorrectFormat,
     EpisodeFailedToParseSeason,
+}
+
+#[derive(Debug)]
+pub enum TreeGenError {
+    EnvVarNotSet,
+    EnvVarNotUnicode(OsString),
+    MoviesDirDoesntExist,
+    ShowsDirDoesntExist,
+    RegexError(regex::Error),
+    StatusReportSendError(watch::error::SendError<String>)
+}
+impl From<regex::Error> for TreeGenError {
+    fn from(value: regex::Error) -> Self {
+        Self::RegexError(value)
+    }
+}
+impl From<watch::error::SendError<String>> for TreeGenError {
+    fn from(value: watch::error::SendError<String>) -> Self {
+        Self::StatusReportSendError(value)
+    }
 }
 
 impl MediaCatalog {
@@ -78,7 +100,7 @@ impl MediaCatalog {
         let mut episodes = vec![];
 
         tracing::info!("Beginning Movies Dir Walk");
-        let mut builder = WalkBuilder::new(movies_dir);
+        let mut builder = WalkBuilder::new(movies_dir.clone());
         builder.min_depth(Some(1))
             .max_depth(Some(1))
             .filter_entry(currying_match(ignore_re.clone(), true))
@@ -92,7 +114,10 @@ impl MediaCatalog {
             if ! dir_entry.path().is_file() { continue; }
 
             let create_result = Movie::new(dir_entry.path().to_path_buf());
-            self.what_i_am_doing.send(dir_entry.path().to_string_lossy().to_string()).unwrap();
+            //? Can symlinks cause problems with the `unwrap` on `strip_prefix`?
+            //? Are paths eagerly evaluated?
+            // TODO: FITFO
+            self.what_i_am_doing.send(format!("[Movie]   Found: {}", dir_entry.file_name().to_string_lossy().to_string()))?;
             if let Err(err) = create_result {
                 let fails = fails_cat.children_mut().unwrap();
                 let buf = dir_entry.path().to_path_buf();
@@ -105,7 +130,7 @@ impl MediaCatalog {
         drop(builder);
 
         tracing::info!("Beginning Shows Dir Walk");
-        let mut builder = WalkBuilder::new(shows_dir);
+        let mut builder = WalkBuilder::new(shows_dir.clone());
         builder.min_depth(Some(1))
             .max_depth(Some(1))
             .filter_entry(currying_match(ignore_re.clone(), true));
@@ -118,7 +143,7 @@ impl MediaCatalog {
             if ! dir_entry.path().is_dir() { continue; }
 
             let create_result = Show::new(dir_entry.path().to_path_buf());
-            self.what_i_am_doing.send(dir_entry.path().to_string_lossy().to_string()).unwrap();
+            self.what_i_am_doing.send(format!("[Show]    Found: {}", dir_entry.file_name().to_string_lossy().to_string()))?;
             if let Err(err) = create_result {
                 let fails = fails_cat.children_mut().unwrap();
                 let buf = dir_entry.path().to_path_buf();
@@ -133,7 +158,7 @@ impl MediaCatalog {
         tracing::info!("Beginning Episodes Walk");
         for show in shows.iter_mut() {
             let mut guard = block_on(show.lock());
-            self.what_i_am_doing.send(guard.src.to_string_lossy().to_string()).unwrap();
+            self.what_i_am_doing.send(format!("[Show]    Looking for Episodes: {}", guard.src.strip_prefix(shows_dir.clone()).unwrap().to_string_lossy().to_string()))?;
             let mut builder = WalkBuilder::new(&guard.src);
             builder.min_depth(Some(1))
                 //* uncommenting these causes crashes
@@ -149,7 +174,7 @@ impl MediaCatalog {
                 if ! dir_entry.path().is_file() { continue; } // skip directories
 
                 let create_result = Episode::new(dir_entry.path().to_path_buf(), Arc::downgrade(show));
-                self.what_i_am_doing.send(dir_entry.path().to_string_lossy().to_string()).unwrap();
+                self.what_i_am_doing.send(format!("[Episode] Found: {}", dir_entry.path().strip_prefix(shows_dir.clone()).unwrap().to_string_lossy().to_string()))?;
                 if let Err(err) = create_result {
                     let fails = fails_cat.children_mut().unwrap();
                     let buf = dir_entry.path().to_path_buf();
@@ -187,26 +212,6 @@ impl MediaCatalog {
     }
     pub fn subscribe(&self) -> watch::Receiver<String> {
         self.what_i_am_doing.subscribe()
-    }
-}
-
-#[derive(Debug)]
-pub enum TreeGenError {
-    EnvVarNotSet,
-    EnvVarNotUnicode(OsString),
-    MoviesDirDoesntExist,
-    ShowsDirDoesntExist,
-    RegexSyntaxError(String),
-    RegexTooBig(usize),
-    RegexUnknown,
-}
-impl From<regex::Error> for TreeGenError {
-    fn from(value: regex::Error) -> Self {
-        match value {
-            regex::Error::Syntax(syntax) => Self::RegexSyntaxError(syntax),
-            regex::Error::CompiledTooBig(size) => Self::RegexTooBig(size),
-            _ => Self::RegexUnknown
-        }
     }
 }
 

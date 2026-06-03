@@ -79,13 +79,15 @@ impl App {
                     }
                 }
                 //* I think putting a timeout in this outer `select!` can cause a race condition by 
-                //* the timeout trashing whatever work is being done in `update`
+                //* the timeout trashing whatever work is being done in `update`.
+                //* Maybe not because we're not `await`ing across writes; control is never
+                //* relinquished while writing so we're never in an undefined state
+                // TODO: FITFO by testing
                 // _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
                 //     tracing::debug!("Timed out waiting for update");
                 //     // self.exit = true;
                 // }
             }
-            // tracing::info!("Async block finished");
         }
         Ok(())
     }
@@ -100,8 +102,6 @@ impl App {
                     self.state = AppState::MillerColumnView(tree_view);
                     return Ok(())
                 }
-                
-                // tracing::info!("Awaiting update");
                 match view.poll().await {
                     Ok(_) => {},
                     Err(err) => { Err(AppUpdateError::GeneratingViewError(err))?; }
@@ -109,12 +109,21 @@ impl App {
             }
             _ => {}
         }
-        Ok(futures::future::ready(()).await)
+        Ok(())
     }
     fn draw(&mut self, frame: &mut Frame) {
+        // Doing this this way because borrowing rules. the state internal to `GeneratingView` and 
+        // `MillerColumns` doesn't have interior mutability, so trait impls for `Renderable` take 
+        // an exclusive reference.
+        // TODO: change view state to use interior mutability and change `Renderable::render` to take `&self`
+        match &self.state {
+            AppState::Postinit               => self.default_background(frame),
+            AppState::GeneratingTree(view)   => self.default_background(frame),
+            AppState::MillerColumnView(view) => {},
+        }
         match &mut self.state {
-            AppState::Postinit => self.post_init(frame),
-            AppState::GeneratingTree(view) => view.render(frame),
+            AppState::Postinit               => {},
+            AppState::GeneratingTree(view)   => view.render(frame),
             AppState::MillerColumnView(view) => view.render(frame),
         }
         if self.error != ErrorCatch::NoError {
@@ -133,27 +142,23 @@ impl App {
             frame.render_widget(paragraph, layout[1]);
         }
     }
-    fn post_init(&self, frame: &mut Frame) {
+    fn default_background(&self, frame: &mut Frame) {
         let area = frame.area();
         let title = Line::from(" Counter App Tutorial ".bold());
         let instructions = Line::from(vec![
-            " Decrement ".into(),
+            " ".into(),
+            "Decrement ".into(),
             format!("<{}>",KeyCode::Left).blue().bold(),
             " Increment ".into(),
             format!("<{}>",KeyCode::Right).blue().bold(),
             " Quit ".into(),
             format!("<{}>",KeyCode::Char('q')).blue().bold(),
             " Load Catalog ".into(),
-            format!("<{}> ",KeyCode::Char('p')).blue().bold(),
+            format!("<{}>",KeyCode::Char('p')).blue().bold(),
+            " ".into(),
         ]);
 
-        let layout = Layout::default()
-            .direction(layout::Direction::Vertical)
-            .margin(1)
-            .constraints(vec![
-                Constraint::Percentage(50),
-                Constraint::Percentage(50)
-            ]);
+        let layout = Layout::vertical([Constraint::Percentage(50); 2]);
         let [top, bottom] = area.layout(&layout);
         frame.render_widget(
             Paragraph::new("outer 0")

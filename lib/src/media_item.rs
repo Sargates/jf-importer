@@ -1,4 +1,5 @@
 use std::fmt;
+use std::hash::Hash;
 use std::sync::{Arc,Weak};
 use std::path::{Path, PathBuf};
 
@@ -8,18 +9,40 @@ use futures::executor::block_on;
 use regex::Regex;
 
 use crate::api::QueryResponse;
-use crate::media_catalog::{TreeNode, CreateError};
 
+use crate::media_catalog::{TreeNode, CreateError};
 #[derive(Debug, Clone)]
 pub enum MediaItem {
     Movie(Arc<Mutex<Movie>>),
     Show(Arc<Mutex<Show>>),
     Episode(Arc<Mutex<Episode>>),
 }
+impl Hash for MediaItem {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            MediaItem::Movie(arc)   => core::ptr::addr_of!(arc).hash(state),
+            MediaItem::Show(arc)    => core::ptr::addr_of!(arc).hash(state),
+            MediaItem::Episode(arc) => core::ptr::addr_of!(arc).hash(state),
+        }
+    }
+}
+impl PartialEq for MediaItem {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Movie(l), Self::Movie(r))     => Arc::ptr_eq(l, r),
+            (Self::Show(l), Self::Show(r))       => Arc::ptr_eq(l, r),
+            (Self::Episode(l), Self::Episode(r)) => Arc::ptr_eq(l, r),
+            _ => false,
+        }
+    }
+}
+impl Eq for MediaItem {}
+
 
 pub enum QueryStatus {
     Failed,
-    InProgress
+    InProgress,
+    Success(QueryResponse),
 }
 
 #[derive(Debug)]
@@ -59,7 +82,7 @@ impl Show {
     }
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub enum EpisodeId {
     Traditional { season: u32, episode: u32, },
     Anime { episode: u32, }

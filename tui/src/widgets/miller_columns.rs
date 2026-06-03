@@ -176,8 +176,10 @@ impl Widget for &mut MillerColumns {
     fn render(self, area: Rect, buf: &mut prelude::Buffer)
     where
         Self: Sized {
-        let outer_layout = Layout::horizontal([Constraint::Ratio(1, 3); 3])
-            .direction(layout::Direction::Horizontal)
+        let outer_layout = Layout::horizontal([
+            Constraint::Ratio(1, 3),
+            Constraint::Fill(1),
+            Constraint::Ratio(1, 3)])
             .spacing(Spacing::Overlap(1))
             // .margin(1)
             .split(*buf.area());

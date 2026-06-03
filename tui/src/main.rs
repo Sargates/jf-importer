@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("CONFIG.clone(): {:#?}", CONFIG.clone());
     println!("SECRETS.clone(): {:#?}", SECRETS.clone());
     
-    // ratatui::run expects a synchronous closure, this is just ripped from `ratatui::run` and
+    // `ratatui::run` expects a synchronous closure, this is just ripped from `ratatui::run` and
     // changed to move `terminal` since it isn't used elsewhere
     let mut terminal = ratatui::init();
     let f = || async move {

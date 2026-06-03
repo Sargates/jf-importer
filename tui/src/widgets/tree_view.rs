@@ -39,14 +39,16 @@ impl TreeView {
 impl Renderable for TreeView {
     fn render(&mut self, frame: &mut ratatui::Frame) {
         let instructions = Line::from(vec![
-            " Select Next ".into(),
-            format!("<{}>",KeyCode::Char('j')).blue().bold(),
+            " ".into(),
+            "Select Next ".into(),
+            format!("<{}>", KeyCode::Char('j')).blue().bold(),
             " Select Prev ".into(),
-            format!("<{}>",KeyCode::Char('k')).blue().bold(),
+            format!("<{}>", KeyCode::Char('k')).blue().bold(),
             " Step Inward ".into(),
-            format!("<{}>",KeyCode::Char('l')).blue().bold(),
+            format!("<{}>", KeyCode::Char('l')).blue().bold(),
             " Step Outward ".into(),
-            format!("<{}> ",KeyCode::Char('h')).blue().bold(),
+            format!("<{}>", KeyCode::Char('h')).blue().bold(),
+            " ".into(),
         ]);
         let block = Block::new()
             .bold()

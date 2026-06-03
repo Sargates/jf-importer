@@ -39,7 +39,7 @@ pub struct Config {
 
     /// Assuming Linux, this is `$HOME/.cache/jf-importer`.
     /// Windows should* be at `C:\Users\<you>\Appdata\Roaming\jf-importer`
-    // TODO: support non-linux
+    // TODO: properly support non-linux
     pub CacheDir: PathBuf,
 
     /// Directory prefix for movie and show directory names
