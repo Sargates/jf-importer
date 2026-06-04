@@ -162,12 +162,12 @@ impl App {
         let [top, bottom] = area.layout(&layout);
         frame.render_widget(
             Paragraph::new("outer 0")
-                .block(Block::new().bold().fg(Color::Red).borders(Borders::ALL).title_bottom(instructions.clone().centered())),
+                .block(Block::new().bold().fg(Color::Red).borders(Borders::ALL).title_top(title.clone()).title_bottom(instructions.clone().centered())),
             top
         );
         frame.render_widget(
             Paragraph::new("outer 1")
-                .block(Block::new().bold().fg(Color::Yellow).borders(Borders::ALL).title_bottom(instructions.clone().centered())),
+                .block(Block::new().bold().fg(Color::Yellow).borders(Borders::ALL).title_top(title.clone()).title_bottom(instructions.clone().centered())),
             bottom
         );
         if CONFIG.load_error != ConfigLoadError::Success {

@@ -35,7 +35,7 @@ pub struct GeneratingView {
     completed: Option<MediaCatalog>,
 
     last: (String, String),
-    buffer: RefCell<Option<Buffer>>
+    buffer: RefCell<ModalBuffer>
     
 }
 impl GeneratingView {
@@ -53,7 +53,7 @@ impl GeneratingView {
             subscriber,
             last: (format!("Unset Previous"), format!("Unset")),
             completed: None,
-            buffer: RefCell::new(None)
+            buffer: Default::default()
         }
     }
     pub async fn poll(&mut self) -> Result<(), GeneratingViewError> {
@@ -94,6 +94,26 @@ impl GeneratingView {
     pub fn take(&mut self) -> Option<MediaCatalog> { self.completed.take() }
 }
 
+#[derive(Default)]
+struct ModalBuffer {
+    inner: Option<Buffer>
+}
+impl ModalBuffer {
+    pub fn is_unset(&self) -> bool { self.inner.is_none() }
+    pub fn generate(&mut self, frame_area: Rect) {
+        let [_, rect] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+            .areas(frame_area);
+        let [_, rect] = Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)])
+            .areas(rect);
+        self.inner = Some(Buffer::empty(rect))
+    }
+    pub fn set(&mut self, inner: Buffer) {
+        self.inner = Some(inner)
+    }
+    pub fn take(&mut self) -> Option<Buffer> {
+        self.inner.take()
+    }
+}
 impl Renderable for GeneratingView {
     fn render(&mut self, frame: &mut ratatui::Frame)
     where
@@ -102,11 +122,8 @@ impl Renderable for GeneratingView {
         let mut buffer = match borrow_mut.take() {
             Some(buffer) => buffer,
             None => {
-                let [_, rect] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
-                    .areas(frame.area());
-                let [_, rect] = Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)])
-                    .areas(rect);
-                Buffer::empty(rect)
+                borrow_mut.generate(frame.area());
+                borrow_mut.take().unwrap()
             }
         };
 
@@ -156,7 +173,7 @@ impl Renderable for GeneratingView {
         // need to re-create a buffer of the original size so that we 
         // don't recursively make the buffer smaller and smaller
         new_inner.resize(buffer.area().clone());
-        *borrow_mut = Some(new_inner);
+        borrow_mut.set(new_inner)
     }
 
     fn handle_input(&mut self, key: crossterm::event::KeyCode) {}
