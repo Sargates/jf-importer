@@ -10,7 +10,7 @@ use regex::Regex;
 
 use crate::api::{QueryStatus, QueryResponse};
 
-use crate::media_catalog::{TreeNode, CreateError};
+use crate::media_catalog::{TreeNode, MediaCreateError};
 #[derive(Debug, Clone)]
 pub enum MediaItem {
     Movie(Arc<Movie>),
@@ -45,10 +45,10 @@ pub struct Movie {
 }
 impl Movie {
     // TODO: How does this work for testing? How do we create dummy movies/episodes for testing?
-    pub(crate) fn new(path: PathBuf) -> Result<Self, CreateError> {
+    pub(crate) fn new(path: PathBuf) -> Result<Self, MediaCreateError> {
         let opt = path.to_str();
-        if let None = opt   { return Err(CreateError::PathNotUnicode); }
-        if ! path.is_file() { return Err(CreateError::IncorrectFileTypeSupplied); }
+        if let None = opt   { return Err(MediaCreateError::PathNotUnicode); }
+        if ! path.is_file() { return Err(MediaCreateError::IncorrectFileTypeSupplied); }
         let src = path;
         let query = Mutex::new(QueryStatus::NotStarted);
         Ok(Movie{ src, query })
@@ -64,10 +64,10 @@ pub struct Show {
 impl Show {
     /// Assumes `movies_dir` exists and is structured correctly
     /// Benefit of doing it this way is that tests are easier to write
-    pub(crate) fn new(path: PathBuf) -> Result<Self, CreateError> {
+    pub(crate) fn new(path: PathBuf) -> Result<Self, MediaCreateError> {
         let opt = path.to_str();
-        if let None = opt  { return Err(CreateError::PathNotUnicode); }
-        if ! path.is_dir() { return Err(CreateError::IncorrectFileTypeSupplied) }
+        if let None = opt  { return Err(MediaCreateError::PathNotUnicode); }
+        if ! path.is_dir() { return Err(MediaCreateError::IncorrectFileTypeSupplied) }
         let src = path;
         let query = Mutex::new(QueryStatus::NotStarted);
         let episodes = Mutex::new(vec![]);
@@ -102,10 +102,10 @@ pub struct Episode {
 }
 impl Episode {
     // Most of this is grandfathered from pre-refactor. This code may be shit
-    pub(crate) fn new(path: PathBuf, parent: Weak<Show>) -> Result<Self, CreateError> {
+    pub(crate) fn new(path: PathBuf, parent: Weak<Show>) -> Result<Self, MediaCreateError> {
         let opt = path.to_str();
-        if let None = opt   { return Err(CreateError::PathNotUnicode); }
-        if ! path.is_file() { return Err(CreateError::IncorrectFileTypeSupplied); }
+        if let None = opt   { return Err(MediaCreateError::PathNotUnicode); }
+        if ! path.is_file() { return Err(MediaCreateError::IncorrectFileTypeSupplied); }
 
         // We know these are good
         let SE_match_re = Regex::new(r"[sS][0-9]+[eE][0-9]+").unwrap();
@@ -115,14 +115,14 @@ impl Episode {
         let file_path = path.to_str().unwrap().to_string();
 
         // TODO: Support Anime numbering
-        if !SE_match_re.is_match(&file_path) { return Err(CreateError::EpisodeIncorrectFormat); }
+        if !SE_match_re.is_match(&file_path) { return Err(MediaCreateError::EpisodeIncorrectFormat); }
 
         let first_match = SE_match_re.find(&file_path);
-        if first_match.is_none() { return Err(CreateError::EpisodeIncorrectFormat); } // just in case, too lazy to scour docs
+        if first_match.is_none() { return Err(MediaCreateError::EpisodeIncorrectFormat); } // just in case, too lazy to scour docs
         let episode_ident = first_match.unwrap().as_str();
 
         if SE_number_re.find_iter(&episode_ident).count() != 2 {
-            return Err(CreateError::EpisodeIncorrectFormat);
+            return Err(MediaCreateError::EpisodeIncorrectFormat);
         }
 
         let mut iterator = SE_number_re.find_iter(&episode_ident);

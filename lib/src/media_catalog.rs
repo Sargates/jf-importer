@@ -26,7 +26,7 @@ pub struct MediaCatalog {
 }
 
 #[derive(Debug, Clone)]
-pub enum CreateError {
+pub enum MediaCreateError {
     FailedToCreateMediaItem,
     PathNotUnicode,
     IncorrectFileTypeSupplied,
@@ -231,7 +231,7 @@ pub enum TreeNode {
         children: Vec<TreeNode>
     },
     Fail {
-        err: CreateError,
+        err: MediaCreateError,
         buf: PathBuf
     },
 }

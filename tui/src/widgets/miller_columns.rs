@@ -1,23 +1,23 @@
-use std::{rc::Rc, cell::RefCell};
-use jf_import_library::api::QueryStatus;
-use jf_import_library::{api::QueryResponse, media_item::MediaItem};
-use jf_import_library::media_catalog::TreeNode;
-
-use std::collections::LinkedList;
-
-use crossterm::event::KeyCode;
 use ratatui::{
     *,
     layout::*,
     text::Line,
     widgets::*,
-    style::{Color,Style,Stylize,Modifier}
+    style::{Color,Style,Stylize,Modifier},
+    crossterm::event::KeyCode
 };
 use ratatui::style::palette::tailwind::{BLUE, GREEN, SLATE};
 
+use std::{rc::Rc, cell::RefCell};
+use std::collections::LinkedList;
+
+use jf_import_library::api::QueryStatus;
+use jf_import_library::{api::QueryResponse, media_item::MediaItem};
+use jf_import_library::media_catalog::TreeNode;
+
 /// A MediaItem converting wrapper to ListItem for displaying within a MillerColumn
 struct MillerItem {
-    inner: MediaItem
+    inner: MediaItem,
 }
 impl MillerItem {
     pub fn new(item: MediaItem) -> Self {
@@ -27,49 +27,35 @@ impl MillerItem {
 
 impl<'a> Into<ListItem<'a>> for MillerItem {
     fn into(self) -> ListItem<'a> {
-                // match movie.query.try_lock() {
-                //     Ok(guard) => {
-                //         match &*guard {
-                //             QueryStatus::Success(response) => response.title.to_string(),
-                //             _ => movie.src.file_stem().unwrap().to_string_lossy().to_string(),
-                //         }
-                //     }
-                //     Err(err) => format!("Unknown Movie (failed to get lock)")
-                // }
-                // match show.query.try_lock() {
-                //     Ok(guard) => {
-                //         match &*guard {
-                //             QueryStatus::Success(response) => response.title.to_string(),
-                //             _ => show.src.file_stem().unwrap().to_string_lossy().to_string(),
-                //         }
-                //     }
-                //     Err(err) => format!("Unknown Show (failed to get lock)")
-                // }
-                // match ep.query.try_lock() {
-                //     Ok(guard) => {
-                //         match &*guard {
-                //             QueryStatus::Success(response) => response.title.to_string(),
-                //             _ => ep.id.to_string(),
-                //         }
-                //     }
-                //     Err(err) => format!("Unknown Episode (failed to get lock)")
-                //
-                // }
-        let (lock, name) = match &self.inner {
+        let name = match &self.inner {
             MediaItem::Movie(movie) => {
-                (&movie.query.try_lock().unwrap(), movie.src.file_stem().unwrap().to_string_lossy().to_string())
+                movie.src.file_stem().unwrap().to_string_lossy().to_string()
             }
             MediaItem::Show(show) => {
-                (&show.query.try_lock().unwrap(), show.src.file_stem().unwrap().to_string_lossy().to_string())
+                show.src.file_name().unwrap().to_string_lossy().to_string()
             }
             MediaItem::Episode(ep)   => {
-                (&ep.query.try_lock().unwrap(), ep.id.clone().to_string())
+                ep.id.clone().to_string()
+            }
+        };
+        let lock = match &self.inner {
+            MediaItem::Movie(movie) => {
+                 movie.query.try_lock() 
+            }
+            MediaItem::Show(show) => {
+                 show.query.try_lock() 
+            }
+            MediaItem::Episode(ep)   => {
+                 ep.query.try_lock() 
             }
         };
 
-        let output_string = match &**lock {
-            QueryStatus::Success(response) => response.title.to_string(),
-            _ => name,
+        let output_string = match lock {
+            Ok(lock) => { lock.to_string(name) }
+            Err(e) => {
+                tracing::info!("[MillterItem] Failed to acquire lock");
+                String::from("No lock available")
+            }
         };
         ListItem::from(output_string)
     }
@@ -158,8 +144,7 @@ impl Widget for &mut MillerColumn {
     fn render(self, area: Rect, buf: &mut prelude::Buffer)
     where 
         Self: Sized {
-        let block = Block::new()
-            .borders(Borders::all())
+        let block = Block::bordered()
             .merge_borders(symbols::merge::MergeStrategy::Fuzzy)
             // .border_set(symbols::border::EMPTY)
             // .border_style(Style::new().fg(SLATE.c100).bg(BLUE.c800))
@@ -172,15 +157,12 @@ impl Widget for &mut MillerColumn {
             .map(|(i, node)| {
                 let node = node.clone();
                 match node {
-                    TreeNode::Category{ name, .. } => {
-                        ListItem::from(name.clone())
-                    }
-                    TreeNode::Item { inner, .. } => {
-                        MillerItem::new(inner).into()
-                    }
-                    TreeNode::Fail{ buf, .. } => {
-                        ListItem::from(buf.to_string_lossy().to_string())
-                    }
+                    TreeNode::Category{ name, .. }
+                        => ListItem::from(name.clone()),
+                    TreeNode::Item { inner, .. }
+                        => MillerItem::new(inner).into(),
+                    TreeNode::Fail { buf, .. }
+                        => ListItem::from(buf.to_string_lossy().to_string()),
                 }
             })
             .collect();

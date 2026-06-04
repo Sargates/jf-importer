@@ -46,8 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("CARGO_CRATE_NAME: {}", env!("CARGO_CRATE_NAME"));
     println!("CONFIG.clone(): {:#?}", CONFIG.clone());
     println!("SECRETS.clone(): {:#?}", SECRETS.clone());
-    tracing::info!("GAMING!");
-    
+
     // `ratatui::run` expects a synchronous closure, this is just ripped from `ratatui::run` and
     // changed to move `terminal` since it isn't used elsewhere
     let mut terminal = ratatui::init();
@@ -56,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     f().await;
     ratatui::restore();
-    
+
     // let mut tree = match MediaCatalog::new(CONFIG.clone()).generate_catalog_tree() {
     //     Ok(t) => t,
     //     Err(err) => { panic!("Failed to create catalog tree! Err: {:?}", err); },

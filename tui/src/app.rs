@@ -94,24 +94,21 @@ impl App {
                     Err(err) => { Err(AppUpdateError::GeneratingViewError(err))?; }
                 }
             }
+            AppState::MillerColumnView(view) => {
+                match view.update().await {
+                    Ok(_) => {}
+                    Err(e) => {}
+                }
+            }
             _ => {}
         }
         Ok(())
     }
     fn draw(&mut self, frame: &mut Frame) {
-        // Doing this this way because borrowing rules. the state internal to `GeneratingView` and 
-        // `MillerColumns` doesn't have interior mutability, so trait impls for `Renderable` take 
-        // an exclusive reference.
-        // TODO: change view state to use interior mutability and change `Renderable::render` to take `&self`
         match &self.state {
-            AppState::Postinit               => self.default_background(frame),
-            AppState::GeneratingTree(view)   => self.default_background(frame),
-            AppState::MillerColumnView(view) => {},
-        }
-        match &self.state {
-            AppState::Postinit               => {},
-            AppState::GeneratingTree(view)   => view.render(frame),
-            AppState::MillerColumnView(view) => view.render(frame),
+            AppState::Postinit               => { self.default_background(frame) },
+            AppState::GeneratingTree(view)   => { self.default_background(frame); view.render(frame) },
+            AppState::MillerColumnView(view) => { view.render(frame) },
         }
         match self.error {
             ErrorCatch::NoError => {}
@@ -161,6 +158,16 @@ impl App {
             bottom
         );
         if CONFIG.load_error != ConfigLoadError::Success {
+            let popup_block = Block::bordered().title("Failed to load configuration!");
+            let float = area.centered(Constraint::Percentage(60), Constraint::Percentage(20));
+
+            frame.render_widget(Clear, float);
+            let paragraph = Paragraph::new(
+                format!("I failed to load your configuration and had to revert to the default.\nError: {:?}\n{:#?}", CONFIG.load_error, CONFIG.clone()))
+                .bold()
+                .fg(Color::Red)
+                .block(popup_block);
+            frame.render_widget(paragraph, float);
         }
     }
     fn handle_events(&mut self) -> io::Result<()> {
@@ -188,13 +195,17 @@ impl App {
                 }
                 self.exit()
             }
-            KeyCode::Char('p') => {
-                let res = GeneratingView::new();
-                self.state = AppState::GeneratingTree(res)
-            }
             _ => {
                 match &mut self.state {
-                    AppState::Postinit => {},
+                    AppState::Postinit => {
+                        match key_event.code {
+                            KeyCode::Char('p') => {
+                                let res = GeneratingView::new();
+                                self.state = AppState::GeneratingTree(res)
+                            }
+                            _ => {}
+                        }
+                    }
                     AppState::GeneratingTree(view) => {}, // no user input
                     AppState::MillerColumnView(view) => view.handle_input(key_event.code)
                 }

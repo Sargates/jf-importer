@@ -13,6 +13,24 @@ pub enum QueryStatus {
     InProgress,
     Success(QueryResponse),
 }
+impl QueryStatus {
+    pub fn to_string(&self, fallback: String) -> String {
+        match self {
+            QueryStatus::Success(query) => {
+                query.title.clone()
+            }
+            QueryStatus::Failed(err) => {
+                String::from(format!("[Failed] {}", fallback))
+            }
+            QueryStatus::NotStarted => {
+                String::from(format!("[NotStarted] {}", fallback))
+            }
+            QueryStatus::InProgress => {
+                String::from(format!("[InProgress] {}", fallback))
+            }
+        }
+    }
+}
 
 /// Errors that can occur in the act of querying an API
 #[derive(Debug)]

@@ -131,7 +131,10 @@ impl Renderable for GeneratingView {
         // just to prevent messy output that a user may notice due to slower crawling
         if self.last.0 == self.last.1 { return; }
         
-        let popup_block = Block::bordered().title(" Generating Media Catalog ");
+        let popup_block = Block::bordered()
+            .title(" Generating Media Catalog ")
+            .merge_borders(symbols::merge::MergeStrategy::Fuzzy)
+        ;
         let mut new_inner = {
             // we take the lines `1..N`, dropping the 0th line, and pad the end of the buffer so it's the right size.
             // ratatui doesn't expose any helpful way to intersect two buffers. `Buffer::merge` just unions two 
@@ -167,7 +170,7 @@ impl Renderable for GeneratingView {
         let pos = new_inner.area.clone().as_position();
         let write_area = Rect::new(pos.x, pos.y+size.height-1, size.width, 1); // last line of buffer
         Widget::render(paragraph, write_area, &mut new_inner);            // render paragraph to last line of buffer
-        tracing::info!("new_inner:\n{:?}", new_inner);
+        // tracing::info!("new_inner:\n{:?}", new_inner);
         frame.buffer_mut().merge(&new_inner);
 
         // need to re-create a buffer of the original size so that we 

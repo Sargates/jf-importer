@@ -192,12 +192,10 @@ impl ApiClient for TMDBClient {
         // Unwrap the `results` given from the API
         let json = json["results"][0].clone();
 
-        // println!("Response: {:?}", json);
         let mut out_query = match TMDBSearchResponse::from_json(json).map_err(|e| e.into()) {
             Ok(r) => r,
             Err(e) => return QueryStatus::Failed(e),
         };
-        // println!("HERE!");
 
         // Fetch actual IMDB ID
         let fut = async {
@@ -233,7 +231,6 @@ impl ApiClient for TMDBClient {
 
         let encoded = urlencoding::encode(&file_stem);
         let url = format!("https://api.themoviedb.org/3/search/tv?query={}&api_key={}", encoded, self.key);
-        // println!("Curling: {}", url);
 
         // println!("Sending call for: {:?}", guard.src.file_name());
         let response = match self.client.get(&url).send().await.map_err(|e| e.into()) {
