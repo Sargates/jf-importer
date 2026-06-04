@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use std::rc::Rc;
+use std::cell::RefCell;
 
 use jf_import_library::api::QueryError;
 use jf_import_library::media_catalog::{MediaCatalog, TreeGenError, TreeNode};
@@ -14,7 +15,7 @@ use jf_import_library::media_item::MediaItem;
 use jf_import_library::media_catalog;
 
 use crossterm::event::KeyCode;
-use crate::app::Renderable;
+use super::Renderable;
 
 use super::miller_columns::*;
 
@@ -25,19 +26,19 @@ pub enum TreeViewError {
 }
 pub struct TreeView {
     tree: Rc<MediaCatalog>,
-    columns: MillerColumns,
+    columns: RefCell<MillerColumns>,
     column_depth: usize,
 }
 impl TreeView {
     pub fn new(tree: Rc<MediaCatalog>) -> Result<Self, TreeViewError> {
         let column = MillerColumn::new(tree.tree.children().unwrap().clone());
-        let mut view = TreeView{tree, columns: MillerColumns::new(column), column_depth: 0};
+        let mut view = TreeView{tree, columns: RefCell::new(MillerColumns::new(column)), column_depth: 0};
         Ok(view)
     }
 }
 
 impl Renderable for TreeView {
-    fn render(&mut self, frame: &mut ratatui::Frame) {
+    fn render(&self, frame: &mut ratatui::Frame) {
         let instructions = Line::from(vec![
             " ".into(),
             "Select Next ".into(),
@@ -58,21 +59,22 @@ impl Renderable for TreeView {
 
         frame.render_widget(&block, frame.area());
         // frame.render_widget(Clear, block.inner(frame.area()));
-        frame.render_widget(&mut self.columns, frame.area());
+        let mut borrow_mut = self.columns.borrow_mut();
+        frame.render_widget(&mut *borrow_mut, frame.area());
     }
     fn handle_input(&mut self, code: crossterm::event::KeyCode) {
         match code {
             crossterm::event::KeyCode::Char('j') => {
-                self.columns.select_next();
+                self.columns.borrow_mut().select_next();
             }
             crossterm::event::KeyCode::Char('k') => {
-                self.columns.select_prev();
+                self.columns.borrow_mut().select_prev();
             }
             crossterm::event::KeyCode::Char('l') => {
-                self.columns.step_into();
+                self.columns.borrow_mut().step_into();
             }
             crossterm::event::KeyCode::Char('h') => {
-                self.columns.step_out();
+                self.columns.borrow_mut().step_out();
             }
             _ => {}
         }

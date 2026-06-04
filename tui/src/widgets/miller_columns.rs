@@ -1,4 +1,5 @@
 use std::{rc::Rc, cell::RefCell};
+use jf_import_library::api::QueryStatus;
 use jf_import_library::{api::QueryResponse, media_item::MediaItem};
 use jf_import_library::media_catalog::TreeNode;
 
@@ -14,6 +15,65 @@ use ratatui::{
 };
 use ratatui::style::palette::tailwind::{BLUE, GREEN, SLATE};
 
+/// A MediaItem converting wrapper to ListItem for displaying within a MillerColumn
+struct MillerItem {
+    inner: MediaItem
+}
+impl MillerItem {
+    pub fn new(item: MediaItem) -> Self {
+        Self { inner: item }
+    }
+}
+
+impl<'a> Into<ListItem<'a>> for MillerItem {
+    fn into(self) -> ListItem<'a> {
+                // match movie.query.try_lock() {
+                //     Ok(guard) => {
+                //         match &*guard {
+                //             QueryStatus::Success(response) => response.title.to_string(),
+                //             _ => movie.src.file_stem().unwrap().to_string_lossy().to_string(),
+                //         }
+                //     }
+                //     Err(err) => format!("Unknown Movie (failed to get lock)")
+                // }
+                // match show.query.try_lock() {
+                //     Ok(guard) => {
+                //         match &*guard {
+                //             QueryStatus::Success(response) => response.title.to_string(),
+                //             _ => show.src.file_stem().unwrap().to_string_lossy().to_string(),
+                //         }
+                //     }
+                //     Err(err) => format!("Unknown Show (failed to get lock)")
+                // }
+                // match ep.query.try_lock() {
+                //     Ok(guard) => {
+                //         match &*guard {
+                //             QueryStatus::Success(response) => response.title.to_string(),
+                //             _ => ep.id.to_string(),
+                //         }
+                //     }
+                //     Err(err) => format!("Unknown Episode (failed to get lock)")
+                //
+                // }
+        let (lock, name) = match &self.inner {
+            MediaItem::Movie(movie) => {
+                (&movie.query.try_lock().unwrap(), movie.src.file_stem().unwrap().to_string_lossy().to_string())
+            }
+            MediaItem::Show(show) => {
+                (&show.query.try_lock().unwrap(), show.src.file_stem().unwrap().to_string_lossy().to_string())
+            }
+            MediaItem::Episode(ep)   => {
+                (&ep.query.try_lock().unwrap(), ep.id.clone().to_string())
+            }
+        };
+
+        let output_string = match &**lock {
+            QueryStatus::Success(response) => response.title.to_string(),
+            _ => name,
+        };
+        ListItem::from(output_string)
+    }
+}
 pub struct MillerColumn {
     inner: Vec<TreeNode>,
     state: ListState,
@@ -116,44 +176,7 @@ impl Widget for &mut MillerColumn {
                         ListItem::from(name.clone())
                     }
                     TreeNode::Item { inner, .. } => {
-                        ListItem::from(match inner {
-                            MediaItem::Movie(movie) => {
-                                match movie.try_lock() {
-                                    Ok(guard) => {
-                                        match &guard.query {
-                                            Some(response) => response.title.to_string(),
-                                            None           => guard.src.file_stem().unwrap().to_string_lossy().to_string(),
-                                        }
-                                    }
-                                    Err(err) => format!("Unknown Movie (failed to get lock)")
-
-                                }
-                            }
-                            MediaItem::Show(show) => {
-                                match show.try_lock() {
-                                    Ok(guard) => {
-                                        match &guard.query {
-                                            Some(response) => response.title.to_string(),
-                                            None           => guard.src.file_name().unwrap().to_string_lossy().to_string(),
-                                        }
-                                    }
-                                    Err(err) => format!("Unknown Show (failed to get lock)")
-                                }
-                            }
-                            MediaItem::Episode(ep)   => {
-                                match ep.try_lock() {
-                                    Ok(guard) => {
-                                        match &guard.query {
-                                            Some(response) => response.title.to_string(),
-                                            None           => guard.id.to_string().clone()
-                                        }
-                                    }
-                                    Err(err) => format!("Unknown Episode (failed to get lock)")
-
-                                }
-                            }
-                        }
-                        )
+                        MillerItem::new(inner).into()
                     }
                     TreeNode::Fail{ buf, .. } => {
                         ListItem::from(buf.to_string_lossy().to_string())

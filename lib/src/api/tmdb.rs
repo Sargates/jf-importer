@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use crate::config::SECRETS;
 use crate::media_item::{MediaItem, Movie, Show, Episode};
-use crate::api::{ApiClient, QueryError, QueryResponse, tmdb};
+use crate::api::{ApiClient, QueryStatus, QueryError, QueryResponse, tmdb};
 
 /// Matches schema from querying:
 ///   - https://api.themoviedb.org/3/search/movie?query=<MOVIE>&api_key=<KEY>
@@ -149,11 +149,11 @@ pub struct TMDBClient {
 }
 
 impl TMDBClient {
-    pub fn new() -> TMDBClient {
+    pub fn new() -> Self {
         let rate_limiter = RateLimiter::direct(
             Quota::per_second(std::num::NonZeroU32::new(20).unwrap())
         );
-        TMDBClient {
+        Self {
             client: Client::new(),
             rate_limiter, 
             key: SECRETS.clone().TMDB_KEY,
@@ -164,33 +164,43 @@ impl TMDBClient {
 #[async_trait]
 impl ApiClient for TMDBClient {
     // TODO: Add checking override
-    async fn search_movie(&self, movie: Arc<Mutex<Movie>>) -> Result<(), QueryError> {
-        if self.key.is_empty() { return Err(QueryError::UnsetApiKey) }
+    async fn search_movie(&self, movie: Arc<Movie>) -> QueryStatus {
+        if self.key.is_empty() { return QueryStatus::Failed(QueryError::UnsetApiKey) }
         self.rate_limiter.until_ready().await;
 
-        let mut guard = movie.lock().await;
-        let file_stem = guard.src.file_stem().unwrap().to_str().unwrap().to_string();
+        // let mut guard = movie.lock().await;
+        let file_stem = movie.src.file_stem().unwrap().to_str().unwrap().to_string();
 
         let encoded = urlencoding::encode(&file_stem);
         let url = format!("https://api.themoviedb.org/3/search/movie?query={}&api_key={}", encoded, self.key);
         // println!("Curling: {}", url);
 
-        let response = self.client.get(&url).send().await?;
-        let json: serde_json::Value = response.json().await?;
+        let response = match self.client.get(&url).send().await.map_err(|e| e.into()) {
+            Ok(r) => r,
+            Err(e) => return QueryStatus::Failed(e),
+        };
+        let json: serde_json::Value = match response.json().await.map_err(|e| e.into()) {
+            Ok(r) => r,
+            Err(e) => return QueryStatus::Failed(e),
+        };
 
         // Check that we succeeded
-        if json["total_results"] == 0 { return Err(QueryError::NoSearchResultsFromApi); }
+        if json["total_results"] == 0 {
+            return QueryStatus::Failed(QueryError::NoSearchResultsFromApi);
+        }
 
         // Unwrap the `results` given from the API
         let json = json["results"][0].clone();
 
         // println!("Response: {:?}", json);
-        let mut out_query = TMDBSearchResponse::from_json(json)?;
+        let mut out_query = match TMDBSearchResponse::from_json(json).map_err(|e| e.into()) {
+            Ok(r) => r,
+            Err(e) => return QueryStatus::Failed(e),
+        };
         // println!("HERE!");
 
         // Fetch actual IMDB ID
         let fut = async {
-            // let mut guard = show.lock().await;
             let url = format!("https://api.themoviedb.org/3/movie/{}/external_ids?api_key={}", out_query.id, self.key);
             // println!("Curling: {}", url);
             let response = self.client.get(&url).send().await?;
@@ -204,19 +214,21 @@ impl ApiClient for TMDBClient {
         };
 
         if let Err(err) = fut.await {
-            println!("Failed to query External IDS for IMDB id!")
+            tracing::error!("Failed to query External IDS for IMDB id!")
         }
-        guard.query = Some(out_query.try_into()?);
-
-        Ok(())
+        match out_query.try_into() {
+            Ok(r) => QueryStatus::Success(r),
+            Err(e) => QueryStatus::Failed(e)
+        }
     }
-    async fn search_show(&self, show: Arc<Mutex<Show>>) -> Result<(), QueryError> {
-        if self.key.is_empty() { return Err(QueryError::UnsetApiKey) }
+    async fn search_show(&self, show: Arc<Show>) -> QueryStatus {
+        if self.key.is_empty() { return QueryStatus::Failed(QueryError::UnsetApiKey) }
+        self.rate_limiter.until_ready().await;
 
         // println!("Waiting for lock!");
-        let mut guard = show.lock().await;
+        // let mut guard = show.lock().await;
         // println!("Acquired Lock: {:?}", guard.src);
-        let file_stem = guard.src.file_name().unwrap().to_str().unwrap().to_string();
+        let file_stem = show.src.file_name().unwrap().to_str().unwrap().to_string();
         // println!("Src: {:?}, Name: {:?}", guard.src, guard.src.file_name().unwrap());
 
         let encoded = urlencoding::encode(&file_stem);
@@ -224,23 +236,33 @@ impl ApiClient for TMDBClient {
         // println!("Curling: {}", url);
 
         // println!("Sending call for: {:?}", guard.src.file_name());
-        let response = self.client.get(&url).send().await?;
+        let response = match self.client.get(&url).send().await.map_err(|e| e.into()) {
+            Ok(r) => r,
+            Err(e) => return QueryStatus::Failed(e),
+        };
         // println!("Received call for: {:?}", guard.src.file_name());
-        let json: serde_json::Value = response.json().await?;
+        let json: serde_json::Value = match response.json().await.map_err(|e| e.into()) {
+            Ok(r) => r,
+            Err(e) => return QueryStatus::Failed(e),
+        };
 
         // Check that we succeeded
-        if json["total_results"] == 0 { return Err(QueryError::NoSearchResultsFromApi); }
+        if json["total_results"] == 0 {
+            return QueryStatus::Failed(QueryError::NoSearchResultsFromApi);
+        }
 
         // Unwrap the `results` given from the API
         let json = json["results"][0].clone();
 
         // println!("Response: {:?}", json);
-        let mut out_query = TMDBSearchResponse::from_json(json)?;
+        let mut out_query = match TMDBSearchResponse::from_json(json).map_err(|e| e.into()) {
+            Ok(r) => r,
+            Err(e) => return QueryStatus::Failed(e),
+        };
         // println!("Query: {:?}", out_query);
 
         // Fetch actual IMDB ID
         let fut = async {
-            // let mut guard = show.lock().await;
             let url = format!("https://api.themoviedb.org/3/tv/{}/external_ids?api_key={}", out_query.id, self.key);
             // println!("Curling: {}", url);
             let response = self.client.get(&url).send().await?;
@@ -254,11 +276,12 @@ impl ApiClient for TMDBClient {
         };
 
         if let Err(err) = fut.await {
-            println!("Failed to query External IDS for IMDB id!")
+            tracing::error!("Failed to query External IDS for IMDB id!")
         }
-        guard.query = Some(out_query.try_into()?);
-
-        Ok(())
+        match out_query.try_into() {
+            Ok(r) => QueryStatus::Success(r),
+            Err(e) => QueryStatus::Failed(e),
+        }
     }
 }
 

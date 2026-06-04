@@ -5,27 +5,30 @@ use async_trait::async_trait;
 
 use crate::media_item::{Movie, Show};
 
-#[derive(Debug, Clone)]
+/// The status of an outgoing query to an API
+#[derive(Debug)]
+pub enum QueryStatus {
+    Failed(QueryError),
+    NotStarted,
+    InProgress,
+    Success(QueryResponse),
+}
+
+/// Errors that can occur in the act of querying an API
+#[derive(Debug)]
 pub enum QueryError {
     /// For TreeNode variants that aren't Movie, Show, Episode
     CantQueryOnType, 
 
-    /// Could be VarError::NotPresent or VarError::NotUnicode
+    /// Api key is empty when attempting to query media.
+    /// Likely that SECRETS reverted to `Default::default()`
     UnsetApiKey,
 
     /// Mappings from `reqwest::Error`
-    ReqwestBuilder,
-    ReqwestRedirect,
-    ReqwestStatus,
-    ReqwestTimeout,
-    ReqwestRequest,
-    ReqwestConnect,
-    ReqwestBody,
-    ReqwestDecode,
-    ReqwestUpgrade,
-    ReqwestUnknown,
+    ReqwestError(reqwest::Error),
 
-    JsonParseError,
+    // Mappings from JsonParseError
+    SerdeDeserializeError(serde_json::Error),
 
     TMDBIncompleteResponse,
     TMDBFailedToConvertFromResponse,
@@ -44,29 +47,36 @@ pub enum QueryError {
 }
 impl From<reqwest::Error> for QueryError {
     fn from(value: reqwest::Error) -> Self {
-        if value.status().is_some() && value.status().unwrap() == reqwest::StatusCode::TOO_MANY_REQUESTS 
-                                    { QueryError::TMDBTooManyRequests } // We respect this response
-        else if value.is_builder()  { QueryError::ReqwestBuilder  }
-        else if value.is_redirect() { QueryError::ReqwestRedirect } 
-        else if value.is_status()   { QueryError::ReqwestStatus  } 
-        else if value.is_timeout()  { QueryError::ReqwestTimeout  } 
-        else if value.is_request()  { QueryError::ReqwestRequest  } 
-        else if value.is_connect()  { QueryError::ReqwestConnect  } 
-        else if value.is_body()     { QueryError::ReqwestBody     } 
-        else if value.is_decode()   { QueryError::ReqwestDecode   } 
-        else if value.is_upgrade()  { QueryError::ReqwestUpgrade } 
-        else                        { QueryError::ReqwestUnknown }
+        if value.status().is_some() && 
+            value.status().unwrap() == reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            // TODO: Don't make this TMDB-specific
+            return QueryError::TMDBTooManyRequests; 
+        }
+        QueryError::ReqwestError(value)
     }
 }
 impl From<serde_json::Error> for QueryError {
     fn from(value: serde_json::Error) -> Self {
-        QueryError::JsonParseError
+        QueryError::SerdeDeserializeError(value)
+    }
+}
+// Apparently it's not common to implement `PartialEq` on error types
+// WHY????
+// https://github.com/seanmonstar/reqwest/issues/471#issuecomment-471114308
+// https://github.com/bincode-org/bincode/pull/273#issuecomment-513773714
+impl PartialEq for QueryError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::FailedToExtractApiData(l0), Self::FailedToExtractApiData(r0)) => l0 == r0,
+            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+        }
     }
 }
 
 /// Abstracted out response object. Only the things we care about (for now)
 // TODO: make these `pub(crate)`
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, Hash)]
 pub struct QueryResponse {
     pub title: String,
     pub year: u32,
@@ -81,6 +91,6 @@ pub struct QueryResponse {
 #[async_trait]
 pub trait ApiClient {
     // fn semaphore_req() -> impl std::future::Future<Output = >
-    async fn search_movie(&self, movie: Arc<Mutex<Movie>>) -> Result<(), QueryError>;
-    async fn search_show(&self, show: Arc<Mutex<Show>>) -> Result<(), QueryError>;
+    async fn search_movie(&self, movie: Arc<Movie>) -> QueryStatus;
+    async fn search_show(&self, show: Arc<Show>) -> QueryStatus;
 }

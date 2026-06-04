@@ -14,18 +14,21 @@ pub static SECRETS: Lazy<Secrets> = Lazy::new(|| {
     Secrets::load_secrets()
 });
 
-#[derive(Clone, Debug, PartialEq, Default)]
+// I'm implementing PartialEq for these are all `unit-like`
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum ConfigLoadError {
     Success,
+
     /// Not necessarily an error
     #[default]
     RevertedToDefault,
+
     FailedToFindHomeDir,
     FileDoesNotExist,
     FailedToReadFile,
     FailedToDeserialize
 }
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(skip_serializing, skip_deserializing)]
     pub source_file: PathBuf,
@@ -143,12 +146,8 @@ impl From<Result<Config, ConfigLoadError>> for Config {
         }
     }
 }
-impl PartialEq for Config {
-    fn ne(&self, other: &Self) -> bool { !self.eq(other) }
-    fn eq(&self, other: &Self) -> bool { self.VideoFileExtensions == other.VideoFileExtensions && self.CacheDir == other.CacheDir && self.SrcBaseDir == other.SrcBaseDir && self.SrcMovieSubDir == other.SrcMovieSubDir && self.SrcShowSubDir == other.SrcShowSubDir && self.DstBaseDir == other.DstBaseDir && self.JfMovieDir == other.JfMovieDir && self.JfShowsDir == other.JfShowsDir }
-}
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Secrets {
     #[serde(skip_serializing, skip_deserializing)]
     pub source_file: PathBuf,

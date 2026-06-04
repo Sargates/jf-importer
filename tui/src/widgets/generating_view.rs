@@ -19,7 +19,7 @@ use jf_import_library::media_item::MediaItem;
 use jf_import_library::media_catalog;
 use jf_import_library::config::*;
 
-use crate::app::Renderable;
+use super::Renderable;
 
 #[derive(Debug)]
 pub enum GeneratingViewError {
@@ -39,7 +39,7 @@ pub struct GeneratingView {
     
 }
 impl GeneratingView {
-    pub fn new() -> GeneratingView {
+    pub fn new() -> Self {
         let catalog = MediaCatalog::new(CONFIG.clone());
         let subscriber = catalog.subscribe();
         let thread_handle = tokio::task::spawn_blocking(move || {
@@ -48,7 +48,7 @@ impl GeneratingView {
             tracing::info!("Finished GeneratingView");
             res
         });
-        GeneratingView {
+        Self {
             thread_handle,
             subscriber,
             last: (format!("Unset Previous"), format!("Unset")),
@@ -115,7 +115,7 @@ impl ModalBuffer {
     }
 }
 impl Renderable for GeneratingView {
-    fn render(&mut self, frame: &mut ratatui::Frame)
+    fn render(&self, frame: &mut ratatui::Frame)
     where
         Self: Sized {
         let mut borrow_mut = self.buffer.borrow_mut();

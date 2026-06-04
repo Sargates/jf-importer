@@ -10,17 +10,17 @@ use ignore::*;
 use tokio::sync::{Mutex, watch};
 use futures::executor::block_on;
 
-use crate::media_item::{MediaItem, Movie, Show, Episode};
-use crate::api::QueryResponse;
+use crate::media_item::{Episode, MediaItem, Movie, Show};
+use crate::api::{QueryStatus, QueryResponse};
 use crate::config::{Config,CONFIG,Secrets,SECRETS};
 
 
 
 pub struct MediaCatalog {
     pub config: Config,
-    pub movies: Vec<Arc<Mutex<Movie>>>,
-    pub shows: Vec<Arc<Mutex<Show>>>,
-    pub episodes: Vec<Arc<Mutex<Episode>>>,
+    pub movies: Vec<Arc<Movie>>,
+    pub shows: Vec<Arc<Show>>,
+    pub episodes: Vec<Arc<Episode>>,
     pub tree: TreeNode,
     what_i_am_doing: watch::Sender<String>,
 }
@@ -117,7 +117,7 @@ impl MediaCatalog {
             //? Can symlinks cause problems with the `unwrap` on `strip_prefix`?
             //? Are paths eagerly evaluated?
             // TODO: FITFO
-            self.what_i_am_doing.send(format!("[Movie]   Found: {}", dir_entry.file_name().to_string_lossy().to_string()))?;
+            self.what_i_am_doing.send(format!("[Movie]   Found: {}", dir_entry.file_name().to_string_lossy().to_string()));
             if let Err(err) = create_result {
                 let fails = fails_cat.children_mut().unwrap();
                 let buf = dir_entry.path().to_path_buf();
@@ -125,7 +125,7 @@ impl MediaCatalog {
                 continue;
             }
             let movie = create_result.unwrap();
-            movies.push(Arc::new(Mutex::new(movie)));
+            movies.push(Arc::new(movie));
         }
         drop(builder);
 
@@ -143,7 +143,7 @@ impl MediaCatalog {
             if ! dir_entry.path().is_dir() { continue; }
 
             let create_result = Show::new(dir_entry.path().to_path_buf());
-            self.what_i_am_doing.send(format!("[Show]    Found: {}", dir_entry.file_name().to_string_lossy().to_string()))?;
+            self.what_i_am_doing.send(format!("[Show]    Found: {}", dir_entry.file_name().to_string_lossy().to_string()));
             if let Err(err) = create_result {
                 let fails = fails_cat.children_mut().unwrap();
                 let buf = dir_entry.path().to_path_buf();
@@ -151,15 +151,15 @@ impl MediaCatalog {
                 continue;
             }
             let show = create_result.unwrap();
-            shows.push(Arc::new(Mutex::new(show)));
+            shows.push(Arc::new(show));
         }
         drop(builder);
 
         tracing::info!("Beginning Episodes Walk");
         for show in shows.iter_mut() {
-            let mut guard = block_on(show.lock());
-            self.what_i_am_doing.send(format!("[Show]    Looking for Episodes: {}", guard.src.strip_prefix(shows_dir.clone()).unwrap().to_string_lossy().to_string()))?;
-            let mut builder = WalkBuilder::new(&guard.src);
+            // let mut guard = block_on(show.lock());
+            self.what_i_am_doing.send(format!("[Show]    Looking for Episodes: {}", show.src.strip_prefix(shows_dir.clone()).unwrap().to_string_lossy().to_string()));
+            let mut builder = WalkBuilder::new(&show.src);
             builder.min_depth(Some(1))
                 //* uncommenting these causes crashes
                 // .filter_entry(currying_match(ignore_re.clone(), true))
@@ -173,8 +173,8 @@ impl MediaCatalog {
                 let dir_entry = result.unwrap();
                 if ! dir_entry.path().is_file() { continue; } // skip directories
 
-                let create_result = Episode::new(dir_entry.path().to_path_buf(), Arc::downgrade(show));
-                self.what_i_am_doing.send(format!("[Episode] Found: {}", dir_entry.path().strip_prefix(shows_dir.clone()).unwrap().to_string_lossy().to_string()))?;
+                let create_result = Episode::new(dir_entry.path().to_path_buf(), Arc::downgrade(&*show));
+                self.what_i_am_doing.send(format!("[Episode] Found: {}", dir_entry.path().strip_prefix(shows_dir.clone()).unwrap().to_string_lossy().to_string()));
                 if let Err(err) = create_result {
                     let fails = fails_cat.children_mut().unwrap();
                     let buf = dir_entry.path().to_path_buf();
@@ -182,9 +182,14 @@ impl MediaCatalog {
                     continue;
                 }
                 let episode = create_result.unwrap();
-                let arc = Arc::new(Mutex::new(episode));
-                episodes.push(arc.clone()); // push to global Episodes
-                guard.episodes.push(arc.clone()); // push to Show's episodes
+                let arc = Arc::new(episode);
+                episodes.push(arc.clone());
+                match show.episodes.try_lock() {
+                    // why the fuck have I never needed this syntax before now??
+                    Ok(mut lock) => { lock.push(arc.clone()); }
+                    Err(e)       => tracing::error!("Failed to acquire lock for show: {}", show.src.to_string_lossy()),
+
+                }
             }
         }
 
@@ -230,7 +235,7 @@ pub enum TreeNode {
         buf: PathBuf
     },
 }
-impl Into<TreeNode> for Arc<Mutex<Movie>> {
+impl Into<TreeNode> for Arc<Movie> {
     fn into(self) -> TreeNode {
         TreeNode::Item {
             inner: MediaItem::Movie(self),
@@ -238,16 +243,16 @@ impl Into<TreeNode> for Arc<Mutex<Movie>> {
         }
     }
 }
-impl Into<TreeNode> for Arc<Mutex<Show>> {
+impl Into<TreeNode> for Arc<Show> {
     fn into(self) -> TreeNode {
-        let new_children = self.try_lock().unwrap().episodes.iter().map(|ep| ep.clone().into()).collect();
+        let new_children = self.episodes.try_lock().unwrap().iter().map(|ep| ep.clone().into()).collect();
         TreeNode::Item {
             inner: MediaItem::Show(self),
             children: new_children,
         }
     }
 }
-impl Into<TreeNode> for Arc<Mutex<Episode>> {
+impl Into<TreeNode> for Arc<Episode> {
     fn into(self) -> TreeNode {
         TreeNode::Item {
             inner: MediaItem::Episode(self),
@@ -280,10 +285,15 @@ impl TreeNode {
     pub fn is_queried(&self) -> bool {
         match self {
             TreeNode::Item { inner, children } => {
-                match inner {
-                    MediaItem::Show(show)       => block_on(show.lock()).query    != None,
-                    MediaItem::Movie(movie)     => block_on(movie.lock()).query   != None,
-                    MediaItem::Episode(episode) => block_on(episode.lock()).query != None,
+                let lock = match inner {
+                    MediaItem::Show(item)    => item.query.try_lock(),
+                    MediaItem::Movie(item)   => item.query.try_lock(),
+                    MediaItem::Episode(item) => item.query.try_lock(),
+                }.unwrap();
+
+                match *lock {
+                    QueryStatus::NotStarted => false,
+                    _                       => false
                 }
             }
             _ => panic!("Expected Movie, Show, or Episode!")
@@ -300,49 +310,54 @@ impl std::fmt::Display for TreeNode {
             TreeNode::Item { inner, children } => {
                 match inner {
                     MediaItem::Show(show) => {
-                        match show.try_lock() {
+                        match show.query.try_lock() {
                             Ok(guard) => {
-                                match &guard.query {
-                                    Some(response) => {
+                                match &*guard {
+                                    QueryStatus::Success(response) => {
                                         write!(f, "{} ({}) ", response.title, response.year);
                                         if let Some(imdb) = &response.imdb {
                                             write!(f, "[imdbid-{}]", imdb) } 
                                         else { write!(f, "[tmdbid-{}]", response.tmdb) }
                                     }
-                                    None => write!(f, "{}", guard.src.to_string_lossy()),
+                                    _ => write!(f, "[{guard:?}] {}", show.src.to_string_lossy()),
                                 }
                             }
                             Err(err) => write!(f, "Failed to get lock for Episode! Error: {:?}", err)
                         }
                     }
                     MediaItem::Movie(movie) => {
-                        match movie.try_lock() {
+                        match movie.query.try_lock() {
                             Ok(guard) => {
-                                match &guard.query {
-                                    Some(response) => {
+                                match &*guard {
+                                    QueryStatus::Success(response) => {
                                         write!(f, "{} ({}) ", response.title, response.year);
                                         if let Some(imdb) = &response.imdb {
                                             write!(f, "[imdbid-{}]", imdb) } 
                                         else { write!(f, "[tmdbid-{}]", response.tmdb) }
                                     }
-                                    None => write!(f, "{}", guard.src.to_string_lossy()),
+                                    _ => write!(f, "[{guard:?}] {}", movie.src.to_string_lossy()),
                                 }
                             }
                             Err(err) => write!(f, "Failed to get lock for Episode! Error: {:?}", err)
                         }
                     }
                     MediaItem::Episode(ep) => {
-                        // I used to get deadlock if I used `block_on(ep.lock())`, but doing it this way is better 
+                        // I used to get a deadlock if I used `block_on` directly, but doing it this way is better
                         // because there shouldn't be any risk of deadlocking in synchronous code.
-                        match ep.try_lock() {
+                        match ep.query.try_lock() {
                             Ok(guard) => {
-                                match (&guard.query, Weak::upgrade(&guard.parent).unwrap().try_lock()) {
-                                    (_, Ok(parent_guard)) 
-                                    if parent_guard.query.is_some() => write!(f, "{} {}", parent_guard.query.as_ref().unwrap().title.clone(), guard.id),
-                                    (_, Ok(parent_guard)) 
-                                    if parent_guard.query.is_none() => write!(f, "Parent query is empty: {}", guard.src.to_string_lossy()),
-                                    (_, Err(err)        )               => write!(f, "Failed to get Parent Lock: {}", guard.src.to_string_lossy()),
-                                    _                                   => unreachable!()
+                                match (&guard, Weak::upgrade(&ep.parent).unwrap().query.try_lock()) {
+                                    (_, Ok(parent_guard)) => {
+                                        match &*parent_guard {
+                                            QueryStatus::Success(response) => write!(f, "{} {}", response.title.clone(), ep.id),
+                                            QueryStatus::Failed(err)       => write!(f, "[Parent Failure]: {}", ep.src.to_string_lossy()),
+                                            QueryStatus::NotStarted        => write!(f, "[Parent Empty]: {}", ep.src.to_string_lossy()),
+                                            QueryStatus::InProgress        => write!(f, "Parent query is in progress: {}", ep.src.to_string_lossy()),
+                                        }
+                                    },
+                                    (_, Err(err)        )
+                                        => write!(f, "Failed to get Parent Lock: {}", ep.src.to_string_lossy()),
+                                    _ => unreachable!()
                                 }
                             }
                             Err(err) => write!(f, "Failed to get lock for Episode! Error: {:?}", err)

@@ -20,14 +20,8 @@ use jf_import_library::{
 use tokio::{self, select, sync::watch};
 use futures::executor::block_on;
 
-use crate::widgets::{self, TreeView, GeneratingView, error::*};
+use crate::widgets::{self, Renderable, TreeView, GeneratingView, error::*};
 use crate::logging::*;
-// use crate::trace_dbg;
-
-pub trait Renderable {
-    fn render(&mut self, frame: &mut ratatui::Frame);
-    fn handle_input(&mut self, key: crossterm::event::KeyCode);
-}
 
 #[derive(Default, Debug)]
 enum ErrorCatch {
@@ -36,17 +30,10 @@ enum ErrorCatch {
     FailedToGenerateTree(TreeGenError),
     AppUpdateError(AppUpdateError)
 }
-impl PartialEq for ErrorCatch {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
-        }
-    }
-}
 
 #[derive(Debug)]
 enum AppUpdateError {
-    ChannelRecvError(watch::error::RecvError),
+    ChannelRecvError,
     GeneratingViewError(GeneratingViewError),
     TreeViewError(TreeViewError),
 }
@@ -121,25 +108,28 @@ impl App {
             AppState::GeneratingTree(view)   => self.default_background(frame),
             AppState::MillerColumnView(view) => {},
         }
-        match &mut self.state {
+        match &self.state {
             AppState::Postinit               => {},
             AppState::GeneratingTree(view)   => view.render(frame),
             AppState::MillerColumnView(view) => view.render(frame),
         }
-        if self.error != ErrorCatch::NoError {
-            let popup_block = Block::bordered().title("An Error Occured!");
-            let horizontal = Layout::default()
-                .direction(layout::Direction::Horizontal)
-                .constraints(vec![Constraint::Fill(3), Constraint::Fill(1)])
-                .split(frame.area());
-            let layout = Layout::default()
-                .direction(layout::Direction::Vertical)
-                .constraints(vec![Constraint::Fill(3), Constraint::Fill(1)])
-                .split(horizontal[1]);
+        match self.error {
+            ErrorCatch::NoError => {}
+            _ => {
+                let popup_block = Block::bordered().title("An Error Occured!");
+                let horizontal = Layout::default()
+                    .direction(layout::Direction::Horizontal)
+                    .constraints(vec![Constraint::Fill(3), Constraint::Fill(1)])
+                    .split(frame.area());
+                let layout = Layout::default()
+                    .direction(layout::Direction::Vertical)
+                    .constraints(vec![Constraint::Fill(3), Constraint::Fill(1)])
+                    .split(horizontal[1]);
 
-            frame.render_widget(Clear, layout[1]);
-            let paragraph = Paragraph::new(format!("Error: {:?}",self.error)).block(popup_block);
-            frame.render_widget(paragraph, layout[1]);
+                frame.render_widget(Clear, layout[1]);
+                let paragraph = Paragraph::new(format!("Error: {:?}",self.error)).block(popup_block);
+                frame.render_widget(paragraph, layout[1]);
+            }
         }
     }
     fn default_background(&self, frame: &mut Frame) {
@@ -171,16 +161,6 @@ impl App {
             bottom
         );
         if CONFIG.load_error != ConfigLoadError::Success {
-            let popup_block = Block::bordered().title("Failed to load configuration!");
-            let float = area.centered(Constraint::Percentage(60), Constraint::Percentage(20));
-
-            frame.render_widget(Clear, float);
-            let paragraph = Paragraph::new(
-                format!("I failed to load your configuration and had to revert to the default.\nError: {:?}\n{:#?}", CONFIG.load_error, CONFIG.clone()))
-                .bold()
-                .fg(Color::Red)
-                .block(popup_block);
-            frame.render_widget(paragraph, float);
         }
     }
     fn handle_events(&mut self) -> io::Result<()> {

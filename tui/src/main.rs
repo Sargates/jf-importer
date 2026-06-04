@@ -26,6 +26,9 @@ use jf_import_library::api::*;
 use jf_import_library::media_item::{Movie, Show, Episode};
 use jf_import_library::config::*;
 
+//* TESTING IMPORTS
+use jf_import_library::media_catalog::MediaCatalog;
+
 fn post_init() {
     // Post-init checks
 }
@@ -35,14 +38,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     color_eyre::install()?;
     initialize_logging()?;
     // println!("DATA_FOLDER: {:?}", DATA_FOLDER.clone().unwrap());
-    // println!("LOG_ENV: {}", LOG_ENV.clone());
-    // println!("LOG_FILE: {}", LOG_FILE.clone());
-    // println!("data_dir: {:?}", get_data_dir());
+    println!("LOG_ENV: {}", LOG_ENV.clone());
+    println!("LOG_FILE: {}", LOG_FILE.clone());
+    println!("data_dir: {:?}", get_data_dir());
     // ''
 
     println!("CARGO_CRATE_NAME: {}", env!("CARGO_CRATE_NAME"));
     println!("CONFIG.clone(): {:#?}", CONFIG.clone());
     println!("SECRETS.clone(): {:#?}", SECRETS.clone());
+    tracing::info!("GAMING!");
     
     // `ratatui::run` expects a synchronous closure, this is just ripped from `ratatui::run` and
     // changed to move `terminal` since it isn't used elsewhere
@@ -53,13 +57,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     f().await;
     ratatui::restore();
     
-    // ratatui::run(|terminal| App::default().run(terminal))?;
-    
-    // let mut tree = match dir_search::generate_catalog_tree() {
+    // let mut tree = match MediaCatalog::new(CONFIG.clone()).generate_catalog_tree() {
     //     Ok(t) => t,
     //     Err(err) => { panic!("Failed to create catalog tree! Err: {:?}", err); },
     // };
-    // // println!("{}", std::env::var("VIDEO_FILE_EXTENTIONS").unwrap());
     //
     // let client: Arc<dyn ApiClient + Send + Sync> = Arc::new(TMDBClient::new());
     //
@@ -69,11 +70,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     let movie = movie.clone();
     //     let client = client.clone();
     //     let future = tokio::task::spawn(async move {
-    //         let formatted_name = match client.search_movie(movie.clone()).await {
-    //             Ok(_) => { movie.lock().await.query.as_ref().unwrap().title.clone() },
-    //             Err(err) => {
+    //         let mut lock = movie.query.lock().await;
+    //         *lock = client.search_movie(movie.clone()).await;
+    //         let formatted_name = match &*lock {
+    //             QueryStatus::Success(query) => {
+    //                 query.title.clone()
+    //             }
+    //             QueryStatus::Failed(err) => {
     //                 println!("Failed to search for Movie! Error: {:?}", err);
     //                 String::from("Unknown")
+    //             }
+    //             QueryStatus::NotStarted => {
+    //                 String::from(format!("[NotStarted] {}", movie.src.to_string_lossy()))
+    //             }
+    //             QueryStatus::InProgress => {
+    //                 String::from(format!("[InProgress] {}", movie.src.to_string_lossy()))
     //             }
     //         };
     //         format!("Movie #{idx}: {formatted_name}")
@@ -86,11 +97,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     let show = show.clone();
     //     let client = client.clone();
     //     let future = tokio::task::spawn(async move {
-    //         let formatted_name = match client.search_show(show.clone()).await {
-    //             Ok(item) => show.lock().await.query.as_ref().unwrap().title.clone(),
-    //             Err(err) => {
+    //         let mut lock = show.query.lock().await;
+    //         *lock = client.search_show(show.clone()).await;
+    //         let formatted_name = match &*lock {
+    //             QueryStatus::Success(query) => {
+    //                 query.title.clone()
+    //             }
+    //             QueryStatus::Failed(err) => {
     //                 println!("Failed to search for Movie! Error: {:?}", err);
-    //                 show.lock().await.src.to_string_lossy().to_string() 
+    //                 String::from("Unknown")
+    //             }
+    //             QueryStatus::NotStarted => {
+    //                 String::from(format!("[NotStarted] {}", show.src.to_string_lossy()))
+    //             }
+    //             QueryStatus::InProgress => {
+    //                 String::from(format!("[InProgress] {}", show.src.to_string_lossy()))
     //             }
     //         };
     //         format!("Show #{idx}: {formatted_name}")
