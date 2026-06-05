@@ -41,7 +41,7 @@ impl Eq for MediaItem {}
 #[derive(Debug)]
 pub struct Movie {
     pub src: PathBuf,
-    pub query: Mutex<QueryStatus>,
+    // pub query: Mutex<QueryStatus>,
 }
 impl Movie {
     // TODO: How does this work for testing? How do we create dummy movies/episodes for testing?
@@ -51,14 +51,14 @@ impl Movie {
         if ! path.is_file() { return Err(MediaCreateError::IncorrectFileTypeSupplied); }
         let src = path;
         let query = Mutex::new(QueryStatus::NotStarted);
-        Ok(Movie{ src, query })
+        Ok(Movie{ src })
     }
 }
 
 #[derive(Debug)]
 pub struct Show {
     pub src: PathBuf, // directory containing show
-    pub query: Mutex<QueryStatus>,
+    // pub query: Mutex<QueryStatus>,
     pub episodes: Mutex<Vec<Arc<Episode>>>,
 }
 impl Show {
@@ -71,7 +71,7 @@ impl Show {
         let src = path;
         let query = Mutex::new(QueryStatus::NotStarted);
         let episodes = Mutex::new(vec![]);
-        Ok(Show{ src, query, episodes })
+        Ok(Show{ src, episodes })
     }
 }
 
@@ -98,7 +98,7 @@ pub struct Episode {
     pub src: PathBuf,
     pub id: EpisodeId,
     pub parent: Weak<Show>,
-    pub query: Mutex<QueryStatus>,
+    // pub query: Mutex<QueryStatus>,
 }
 impl Episode {
     // Most of this is grandfathered from pre-refactor. This code may be shit
@@ -133,7 +133,7 @@ impl Episode {
         let id = EpisodeId::Traditional { season, episode };
         let query = Mutex::new(QueryStatus::NotStarted);
 
-        Ok(Episode{ src, id, query, parent })
+        Ok(Episode{ src, id, parent })
     }
 }
 

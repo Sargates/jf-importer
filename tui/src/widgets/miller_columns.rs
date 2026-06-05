@@ -11,8 +11,8 @@ use ratatui::style::palette::tailwind::{BLUE, GREEN, SLATE};
 use std::{rc::Rc, cell::RefCell};
 use std::collections::LinkedList;
 
-use jf_import_library::api::QueryStatus;
-use jf_import_library::{api::QueryResponse, media_item::MediaItem};
+use jf_import_library::API_CALLS;
+use jf_import_library::{api::{QueryResponse, QueryStatus}, media_item::MediaItem};
 use jf_import_library::media_catalog::TreeNode;
 
 /// A MediaItem converting wrapper to ListItem for displaying within a MillerColumn
@@ -38,25 +38,20 @@ impl<'a> Into<ListItem<'a>> for MillerItem {
                 ep.id.clone().to_string()
             }
         };
-        let lock = match &self.inner {
-            MediaItem::Movie(movie) => {
-                 movie.query.try_lock() 
-            }
-            MediaItem::Show(show) => {
-                 show.query.try_lock() 
-            }
-            MediaItem::Episode(ep)   => {
-                 ep.query.try_lock() 
-            }
-        };
+        let query = API_CALLS.get_query(&self.inner).unwrap();
+        // let lock = match & {
+        //     MediaItem::Movie(movie) => {
+        //          movie.query.try_lock() 
+        //     }
+        //     MediaItem::Show(show) => {
+        //          show.query.try_lock() 
+        //     }
+        //     MediaItem::Episode(ep)   => {
+        //          ep.query.try_lock() 
+        //     }
+        // };
 
-        let output_string = match lock {
-            Ok(lock) => { lock.to_string(name) }
-            Err(e) => {
-                tracing::info!("[MillterItem] Failed to acquire lock");
-                String::from("No lock available")
-            }
-        };
+        let output_string = query.to_string(name);
         ListItem::from(output_string)
     }
 }

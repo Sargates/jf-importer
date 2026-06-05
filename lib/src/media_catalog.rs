@@ -14,6 +14,8 @@ use crate::media_item::{Episode, MediaItem, Movie, Show};
 use crate::api::{QueryStatus, QueryResponse};
 use crate::config::{Config,CONFIG,Secrets,SECRETS};
 
+use crate::API_CALLS;
+
 
 
 pub struct MediaCatalog {
@@ -124,8 +126,9 @@ impl MediaCatalog {
                 fails.push(TreeNode::Fail{err, buf});
                 continue;
             }
-            let movie = create_result.unwrap();
-            movies.push(Arc::new(movie));
+            let movie = Arc::new(create_result.unwrap());
+            API_CALLS.push_query(MediaItem::Movie(movie.clone()), QueryStatus::NotStarted);
+            movies.push(movie);
         }
         drop(builder);
 
@@ -150,8 +153,9 @@ impl MediaCatalog {
                 fails.push(TreeNode::Fail{err, buf});
                 continue;
             }
-            let show = create_result.unwrap();
-            shows.push(Arc::new(show));
+            let show = Arc::new(create_result.unwrap());
+            API_CALLS.push_query(MediaItem::Show(show.clone()), QueryStatus::NotStarted);
+            shows.push(show);
         }
         drop(builder);
 
@@ -183,6 +187,7 @@ impl MediaCatalog {
                 }
                 let episode = create_result.unwrap();
                 let arc = Arc::new(episode);
+                API_CALLS.push_query(MediaItem::Episode(arc.clone()), QueryStatus::NotStarted);
                 episodes.push(arc.clone());
                 match show.episodes.try_lock() {
                     // why the fuck have I never needed this syntax before now??
@@ -285,13 +290,7 @@ impl TreeNode {
     pub fn is_queried(&self) -> bool {
         match self {
             TreeNode::Item { inner, children } => {
-                let lock = match inner {
-                    MediaItem::Show(item)    => item.query.try_lock(),
-                    MediaItem::Movie(item)   => item.query.try_lock(),
-                    MediaItem::Episode(item) => item.query.try_lock(),
-                }.unwrap();
-
-                match *lock {
+                match *API_CALLS.get_query(inner).unwrap() {
                     QueryStatus::NotStarted => false,
                     _                       => false
                 }
@@ -308,61 +307,55 @@ impl std::fmt::Display for TreeNode {
                 write!(f, "{name}")
             }
             TreeNode::Item { inner, children } => {
-                match inner {
+                match &inner {
                     MediaItem::Show(show) => {
-                        match show.query.try_lock() {
-                            Ok(guard) => {
-                                match &*guard {
-                                    QueryStatus::Success(response) => {
-                                        write!(f, "{} ({}) ", response.title, response.year);
-                                        if let Some(imdb) = &response.imdb {
-                                            write!(f, "[imdbid-{}]", imdb) } 
-                                        else { write!(f, "[tmdbid-{}]", response.tmdb) }
-                                    }
-                                    _ => write!(f, "[{guard:?}] {}", show.src.to_string_lossy()),
-                                }
+                        let r_status = API_CALLS.get_query(inner).unwrap();
+                        match &*r_status {
+                            QueryStatus::Success(response) => {
+                                write!(f, "{} ({}) ", response.title, response.year);
+                                if let Some(imdb) = &response.imdb {
+                                    write!(f, "[imdbid-{}]", imdb) } 
+                                else { write!(f, "[tmdbid-{}]", response.tmdb) }
                             }
-                            Err(err) => write!(f, "Failed to get lock for Episode! Error: {:?}", err)
+                            _ => write!(f, "[{r_status:?}] {}", show.src.to_string_lossy()),
                         }
                     }
                     MediaItem::Movie(movie) => {
-                        match movie.query.try_lock() {
-                            Ok(guard) => {
-                                match &*guard {
-                                    QueryStatus::Success(response) => {
-                                        write!(f, "{} ({}) ", response.title, response.year);
-                                        if let Some(imdb) = &response.imdb {
-                                            write!(f, "[imdbid-{}]", imdb) } 
-                                        else { write!(f, "[tmdbid-{}]", response.tmdb) }
-                                    }
-                                    _ => write!(f, "[{guard:?}] {}", movie.src.to_string_lossy()),
-                                }
+                        let r_status = API_CALLS.get_query(inner).unwrap();
+                        match &*r_status {
+                            QueryStatus::Success(response) => {
+                                write!(f, "{} ({}) ", response.title, response.year);
+                                if let Some(imdb) = &response.imdb {
+                                    write!(f, "[imdbid-{}]", imdb) } 
+                                else { write!(f, "[tmdbid-{}]", response.tmdb) }
                             }
-                            Err(err) => write!(f, "Failed to get lock for Episode! Error: {:?}", err)
+                            _ => write!(f, "[{r_status:?}] {}", movie.src.to_string_lossy()),
                         }
                     }
                     MediaItem::Episode(ep) => {
                         // I used to get a deadlock if I used `block_on` directly, but doing it this way is better
                         // because there shouldn't be any risk of deadlocking in synchronous code.
-                        match ep.query.try_lock() {
-                            Ok(guard) => {
-                                match (&guard, Weak::upgrade(&ep.parent).unwrap().query.try_lock()) {
-                                    (_, Ok(parent_guard)) => {
-                                        match &*parent_guard {
-                                            QueryStatus::Success(response) => write!(f, "{} {}", response.title.clone(), ep.id),
-                                            QueryStatus::Failed(err)       => write!(f, "[Parent Failure]: {}", ep.src.to_string_lossy()),
-                                            QueryStatus::NotStarted        => write!(f, "[Parent Empty]: {}", ep.src.to_string_lossy()),
-                                            QueryStatus::InProgress        => write!(f, "Parent query is in progress: {}", ep.src.to_string_lossy()),
-                                        }
-                                    },
-                                    (_, Err(err)        )
-                                        => write!(f, "Failed to get Parent Lock: {}", ep.src.to_string_lossy()),
-                                    _ => unreachable!()
-                                }
-                            }
-                            Err(err) => write!(f, "Failed to get lock for Episode! Error: {:?}", err)
+                        let parent_item = MediaItem::Show(Weak::upgrade(&ep.parent).unwrap());
+                        match (&*API_CALLS.get_query(&inner).unwrap(), &*API_CALLS.get_query(&parent_item).unwrap()) {
 
+                            (_, QueryStatus::Success(response)) => {
+                                write!(f, "{} ({}) ", response.title, response.year);
+                                if let Some(imdb) = &response.imdb {
+                                    write!(f, "[imdbid-{}]", imdb) } 
+                                else { write!(f, "[tmdbid-{}]", response.tmdb) }
+
+                                // match &*parent_guard {
+                                //     QueryStatus::Success(response) => write!(f, "{} {}", response.title.clone(), ep.id),
+                                //     QueryStatus::Failed(err)       => write!(f, "[Parent Failure]: {}", ep.src.to_string_lossy()),
+                                //     QueryStatus::NotStarted        => write!(f, "[Parent Empty]: {}", ep.src.to_string_lossy()),
+                                //     QueryStatus::InProgress        => write!(f, "Parent query is in progress: {}", ep.src.to_string_lossy()),
+                                // }
+                            },
+                            (_, _)
+                                => write!(f, "Parent query Failed: {}", ep.src.to_string_lossy()),
+                            _ => unreachable!()
                         }
+
                     }
                 }
             }

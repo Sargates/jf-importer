@@ -15,10 +15,10 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use jf_import_library::api::{QueryStatus, QueryError, TMDBClient};
+use jf_import_library::api::{self, QueryStatus, QueryError, TMDBClient};
 use jf_import_library::media_catalog::{MediaCatalog, TreeGenError, TreeNode};
 use jf_import_library::media_item::MediaItem;
-use jf_import_library::api;
+use jf_import_library::global::*;
 
 use super::Renderable;
 use super::miller_columns::*;
@@ -36,7 +36,7 @@ pub struct TreeView {
     columns: RefCell<MillerColumns>,
     column_depth: usize,
     api_client: Arc<dyn api::ApiClient + Send + Sync>,
-    api_futures: FuturesUnordered<JoinHandle<String>>,
+    api_futures: FuturesUnordered<JoinHandle<MediaItem>>,
 }
 impl TreeView {
     pub fn new(tree: Rc<MediaCatalog>) -> Result<Self, TreeViewError> {
@@ -55,7 +55,7 @@ impl TreeView {
             select! {
                 Some(result) = self.api_futures.next() => {
                     match result {
-                        Ok(returned)    => { tracing::info!("async API call returned, result: {}", returned); },
+                        Ok(returned)    => { tracing::info!("API call returned, result: {:?} -> {:?}", returned, API_CALLS.get_query(&returned).unwrap()); },
                         Err(join_error) => { tracing::error!("Failed to join future and main thread! Error: {:?}", join_error); },
                     }
                 }
@@ -73,11 +73,13 @@ impl TreeView {
             let client = self.api_client.clone();
             let future = tokio::task::spawn(async move {
                 let status = client.search_movie(movie.clone()).await;
-                let formatted_name = status.to_string(movie.src.to_string_lossy().to_string());
-                let mut lock = movie.query.lock().await;
-                *lock = status;
+                let item = MediaItem::Movie(movie);
+                API_CALLS.push_query(item.clone(), status);
+                // let formatted_name = status.to_string(movie.src.to_string_lossy().to_string());
+                // let mut lock = movie.query.lock().await;
+                // *lock = status;
                 // format!("Movie #{idx}: {formatted_name}")
-                formatted_name
+                item
             });
             self.api_futures.push(future);
         }
@@ -88,11 +90,13 @@ impl TreeView {
             let client = self.api_client.clone();
             let future = tokio::task::spawn(async move {
                 let status = client.search_show(show.clone()).await;
-                let formatted_name = status.to_string(show.src.to_string_lossy().to_string());
-                let mut lock = show.query.lock().await;
-                *lock = status;
+                let item = MediaItem::Show(show);
+                API_CALLS.push_query(item.clone(), status);
+                // let formatted_name = status.to_string(show.src.to_string_lossy().to_string());
+                // let mut lock = show.query.lock().await;
+                // *lock = status;
                 // format!("Show #{idx}: {formatted_name}")
-                formatted_name
+                item
             });
             self.api_futures.push(future);
         }

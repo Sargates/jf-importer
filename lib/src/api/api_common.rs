@@ -79,6 +79,7 @@ impl From<serde_json::Error> for QueryError {
         QueryError::SerdeDeserializeError(value)
     }
 }
+
 // Apparently it's not common to implement `PartialEq` on error types
 // WHY????
 // https://github.com/seanmonstar/reqwest/issues/471#issuecomment-471114308

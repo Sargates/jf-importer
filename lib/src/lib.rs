@@ -39,6 +39,9 @@
 pub mod config;
 pub mod media_item;
 pub mod api;
+pub mod global;
 pub mod media_catalog;
 // pub mod flux;
+
+pub use global::*;
 
