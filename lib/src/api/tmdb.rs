@@ -1,6 +1,6 @@
 use regex::Regex;
-use serde_json::{self, to_string_pretty};
 use serde::{Deserialize, Serialize};
+use serde_json::{self, to_string_pretty, Value};
 use reqwest::{Client, Response};
 
 use tokio::time::Instant;
@@ -12,10 +12,14 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use std::cell::RefCell;
 use std::time::Duration;
+use std::collections::HashMap;
 
 use crate::config::SECRETS;
-use crate::media_item::{MediaItem, Movie, Show, Episode};
-use crate::api::{ApiClient, QueryStatus, QueryError, QueryResponse, tmdb};
+use crate::media::types::{MediaItem, Movie, Show, Episode};
+use crate::api::{
+    client::{ApiClient, QueryStatus, QueryResponse},
+    error::QueryError,
+};
 
 /// Matches schema from querying:
 ///   - https://api.themoviedb.org/3/search/movie?query=<MOVIE>&api_key=<KEY>
@@ -31,53 +35,49 @@ pub struct TMDBSearchResponse {
     /// The value here should be appended to `https://image.tmdb.org/t/p/w1280`
     backdrop_path: String,
 
-    /// Vector of UUIDs that TMDB uses for genres
-    genre_ids: Vec<u32>,
 
     /// TMDB UUID for media item
     id: u32,
-
-    /// Languages of origin
-    original_language: String,
-
-    /// Originaly title of media
-    #[serde(alias = "original_name")]
-    original_title: String,
-    
-    /// Short description of media
-    overview: String,
-
-    /// TMDB popularity of the media
-    popularity: f32,
-
-    /// Route to fetch a poster image for the media
-    poster_path: String,
 
     /// YYYY-MM-DD
     #[serde(alias = "first_air_date")]
     release_date: String, 
 
-    /// Porn??
-    softcore: bool,
+
+    /// Originaly title of media
+    #[serde(alias = "original_name")]
+    original_title: String,
+    
+
+
 
     /// Title of the media
     #[serde(alias = "name")]
     title: String,
 
-    /// Average rating of media: [0-10]
-    vote_average: f32,
-
-    /// Number of votes
-    vote_count: f32,
-
-    // Addon things, just filler fields to ensure serde doesn't fail
-    /// Whether this is a video? Like Youtube?
-    #[serde(skip_serializing_if = "Option::is_none")]
-    video: Option<bool>,
-
-    /// Countries of origin
-    #[serde(skip_serializing_if = "Option::is_none")]
-    origin_country: Option<Vec<String>>,
+    #[serde(flatten)]
+    garbage: HashMap<String, Value>,
+    // /// Vector of UUIDs that TMDB uses for genres
+    // genre_ids: Vec<u32>,
+    // /// Languages of origin
+    // original_language: String,
+    // /// Short description of media
+    // overview: String,
+    // /// TMDB popularity of the media
+    // popularity: f32,
+    // /// Route to fetch a poster image for the media
+    // poster_path: String,
+    // /// Porn??
+    // softcore: bool,
+    // /// Average rating of media: [0-10]
+    // vote_average: f32,
+    // /// Number of votes
+    // vote_count: f32,
+    // // Addon things, just filler fields to ensure serde doesn't fail
+    // /// Whether this is a video? Like Youtube?
+    // video: Option<bool>,
+    // /// Countries of origin
+    // origin_country: Option<Vec<String>>,
 
     // Post-creation things that aren't included in the API; these require extra processing
     /// IMDB ID of queried item
@@ -94,14 +94,15 @@ impl TryInto<QueryResponse> for TMDBSearchResponse {
         Ok(QueryResponse {
             title: self.title,
             year: str::parse::<u32>(&collection).map_err(|_| QueryError::TMDBFailedToConvertFromResponse)?,
-            imdb: self.imdb_id.is_empty().then_some(self.imdb_id),
+            imdb: self.imdb_id.is_empty().then(|| self.imdb_id),
             tmdb: format!("{}", self.id),
         })
     }
 }
-impl TMDBSearchResponse {
-    fn from_json(object: serde_json::Value) -> Result<Self, serde_json::Error> {
-        Ok(serde_json::from_value::<Self>(object)?)
+impl TryFrom<serde_json::Value> for TMDBSearchResponse {
+    type Error = serde_json::Error;
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        Ok(serde_json::from_value::<Self>(value)?)
     }
 }
 
@@ -119,26 +120,13 @@ pub struct TMDBExternalIdsResponse {
     imdb_id: Option<String>,
 
     // Half of these we don't care about
-    #[serde(skip_serializing_if = "Option::is_none")]
-    freebase_mid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    freebase_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tvdb_id: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tvrage_id: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    wikidata_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    facebook_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    instagram_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    twitter_id: Option<String>,
+    #[serde(flatten)]
+    garbage: HashMap<String, serde_json::Value>
 }
-impl TMDBExternalIdsResponse {
-    fn from_json(object: serde_json::Value) -> Result<Self, serde_json::Error> {
-        Ok(serde_json::from_value::<Self>(object)?)
+impl TryFrom<serde_json::Value> for TMDBExternalIdsResponse {
+    type Error = serde_json::Error;
+    fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
+        Ok(serde_json::from_value::<Self>(value)?)
     }
 }
 
@@ -192,7 +180,7 @@ impl ApiClient for TMDBClient {
         // Unwrap the `results` given from the API
         let json = json["results"][0].clone();
 
-        let mut out_query = match TMDBSearchResponse::from_json(json).map_err(|e| e.into()) {
+        let mut out_query = match TMDBSearchResponse::try_from(json).map_err(|e| e.into()) {
             Ok(r) => r,
             Err(e) => return QueryStatus::Failed(e),
         };
@@ -205,7 +193,7 @@ impl ApiClient for TMDBClient {
             // println!("tmdb_response: {:?}", out_query);
             let json: serde_json::Value = response.json().await?;
             // println!("Response: {:?}", json);
-            let tmdb_response = TMDBExternalIdsResponse::from_json(json)?;
+            let tmdb_response = TMDBExternalIdsResponse::try_from(json)?;
             // println!("tmdb_response: {:?}", tmdb_response);
             out_query.imdb_id = tmdb_response.imdb_id.unwrap_or(String::new());
             Ok::<(), QueryError>(())
@@ -252,22 +240,20 @@ impl ApiClient for TMDBClient {
         let json = json["results"][0].clone();
 
         // println!("Response: {:?}", json);
-        let mut out_query = match TMDBSearchResponse::from_json(json).map_err(|e| e.into()) {
+        let mut out_query = match TMDBSearchResponse::try_from(json).map_err(|e| e.into()) {
             Ok(r) => r,
             Err(e) => return QueryStatus::Failed(e),
         };
         // println!("Query: {:?}", out_query);
 
         // Fetch actual IMDB ID
+        // this isn't an actual error so we can't use `async move` and lose `out_query` in case it
+        // fails
         let fut = async {
             let url = format!("https://api.themoviedb.org/3/tv/{}/external_ids?api_key={}", out_query.id, self.key);
-            // println!("Curling: {}", url);
             let response = self.client.get(&url).send().await?;
-            // println!("tmdb_response: {:?}", out_query);
             let json: serde_json::Value = response.json().await?;
-            // println!("Response: {:?}", json);
-            let tmdb_response = TMDBExternalIdsResponse::from_json(json)?;
-            // println!("tmdb_response: {:?}", tmdb_response);
+            let tmdb_response = TMDBExternalIdsResponse::try_from(json)?;
             out_query.imdb_id = tmdb_response.imdb_id.unwrap_or(String::new());
             Ok::<(), QueryError>(())
         };

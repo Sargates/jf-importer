@@ -10,13 +10,13 @@ use ignore::*;
 use tokio::sync::{Mutex, watch};
 use futures::executor::block_on;
 
-use crate::media_item::{Episode, MediaItem, Movie, Show};
-use crate::api::{QueryStatus, QueryResponse};
+use crate::media::types::{Episode, MediaItem, Movie, Show};
+use crate::media::tree::{TreeNode, TreeGenError};
+use crate::api::{
+    calls::ApiManifest,
+    client::{QueryResponse, QueryStatus}
+};
 use crate::config::{Config,CONFIG,Secrets,SECRETS};
-
-use crate::API_CALLS;
-
-
 
 pub struct MediaCatalog {
     pub config: Config,
@@ -24,38 +24,11 @@ pub struct MediaCatalog {
     pub shows: Vec<Arc<Show>>,
     pub episodes: Vec<Arc<Episode>>,
     pub tree: TreeNode,
+    // pub manifest: Option<ApiManifest>,
     what_i_am_doing: watch::Sender<String>,
 }
 
-#[derive(Debug, Clone)]
-pub enum MediaCreateError {
-    FailedToCreateMediaItem,
-    PathNotUnicode,
-    IncorrectFileTypeSupplied,
-    EpisodeIncorrectFormat,
-    EpisodeFailedToParseSeason,
-}
-
-#[derive(Debug)]
-pub enum TreeGenError {
-    EnvVarNotSet,
-    EnvVarNotUnicode(OsString),
-    MoviesDirDoesntExist,
-    ShowsDirDoesntExist,
-    RegexError(regex::Error),
-    StatusReportSendError(watch::error::SendError<String>)
-}
-impl From<regex::Error> for TreeGenError {
-    fn from(value: regex::Error) -> Self {
-        Self::RegexError(value)
-    }
-}
-impl From<watch::error::SendError<String>> for TreeGenError {
-    fn from(value: watch::error::SendError<String>) -> Self {
-        Self::StatusReportSendError(value)
-    }
-}
-
+// TODO: Move this to a dedicated `MediaCatalogBuilder` type
 impl MediaCatalog {
     pub fn new(config: Config) -> MediaCatalog {
         let (tx, _) = watch::channel(String::from("Waiting for Feedback!"));
@@ -65,7 +38,8 @@ impl MediaCatalog {
             shows: vec![],
             episodes: vec![],
             tree: TreeNode::Category { name: format!("Uninitialized Tree"), children: vec![] },
-            what_i_am_doing: tx
+            what_i_am_doing: tx,
+            // manifest: Some(ApiManifest::new())
         }
     }
 
@@ -127,7 +101,7 @@ impl MediaCatalog {
                 continue;
             }
             let movie = Arc::new(create_result.unwrap());
-            API_CALLS.push_query(MediaItem::Movie(movie.clone()), QueryStatus::NotStarted);
+            // API_CALLS.push_query(MediaItem::Movie(movie.clone()), QueryStatus::NotStarted);
             movies.push(movie);
         }
         drop(builder);
@@ -154,7 +128,7 @@ impl MediaCatalog {
                 continue;
             }
             let show = Arc::new(create_result.unwrap());
-            API_CALLS.push_query(MediaItem::Show(show.clone()), QueryStatus::NotStarted);
+            // API_CALLS.push_query(MediaItem::Show(show.clone()), QueryStatus::NotStarted);
             shows.push(show);
         }
         drop(builder);
@@ -187,7 +161,7 @@ impl MediaCatalog {
                 }
                 let episode = create_result.unwrap();
                 let arc = Arc::new(episode);
-                API_CALLS.push_query(MediaItem::Episode(arc.clone()), QueryStatus::NotStarted);
+                // API_CALLS.push_query(MediaItem::Episode(arc.clone()), QueryStatus::NotStarted);
                 episodes.push(arc.clone());
                 match show.episodes.try_lock() {
                     // why the fuck have I never needed this syntax before now??
@@ -217,7 +191,8 @@ impl MediaCatalog {
             shows,
             episodes,
             tree: root,
-            what_i_am_doing: self.what_i_am_doing
+            what_i_am_doing: self.what_i_am_doing,
+            // manifest: self.manifest
         })
     }
     pub fn subscribe(&self) -> watch::Receiver<String> {
@@ -225,143 +200,3 @@ impl MediaCatalog {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum TreeNode {
-    Category {
-        name: String,
-        children: Vec<TreeNode>
-    },
-    Item {
-        inner: MediaItem,
-        children: Vec<TreeNode>
-    },
-    Fail {
-        err: MediaCreateError,
-        buf: PathBuf
-    },
-}
-impl Into<TreeNode> for Arc<Movie> {
-    fn into(self) -> TreeNode {
-        TreeNode::Item {
-            inner: MediaItem::Movie(self),
-            children: vec![]
-        }
-    }
-}
-impl Into<TreeNode> for Arc<Show> {
-    fn into(self) -> TreeNode {
-        let new_children = self.episodes.try_lock().unwrap().iter().map(|ep| ep.clone().into()).collect();
-        TreeNode::Item {
-            inner: MediaItem::Show(self),
-            children: new_children,
-        }
-    }
-}
-impl Into<TreeNode> for Arc<Episode> {
-    fn into(self) -> TreeNode {
-        TreeNode::Item {
-            inner: MediaItem::Episode(self),
-            children: vec![]
-        }
-    }
-}
-impl TreeNode {
-    pub fn children(&self) -> Option<&Vec<TreeNode>> {
-        match self {
-            TreeNode::Category{ name, children } => Some(children),
-            TreeNode::Item{ inner, children }    => Some(children),
-            _                                    => None
-        }
-    }
-    pub fn children_mut(&mut self) -> Option<&mut Vec<TreeNode>> {
-        match self {
-            TreeNode::Category{ name, children } => Some(children),
-            TreeNode::Item{ inner, children }    => Some(children),
-            _                                    => None
-        }
-        }
-    pub fn push_child(&mut self, child: TreeNode) {
-        match self {
-            TreeNode::Category{ name, children } => { children.push(child); }
-            TreeNode::Item{ inner, children }    => { children.push(child); }
-            _                                    => panic!("Expected variant with children")
-        }
-    }
-    pub fn is_queried(&self) -> bool {
-        match self {
-            TreeNode::Item { inner, children } => {
-                match *API_CALLS.get_query(inner).unwrap() {
-                    QueryStatus::NotStarted => false,
-                    _                       => false
-                }
-            }
-            _ => panic!("Expected Movie, Show, or Episode!")
-        }
-    }
-}
-impl std::fmt::Display for TreeNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // writeln!(f, "Printing: {:?}", self);
-        match self {
-            TreeNode::Category{ name, children } => {
-                write!(f, "{name}")
-            }
-            TreeNode::Item { inner, children } => {
-                match &inner {
-                    MediaItem::Show(show) => {
-                        let r_status = API_CALLS.get_query(inner).unwrap();
-                        match &*r_status {
-                            QueryStatus::Success(response) => {
-                                write!(f, "{} ({}) ", response.title, response.year);
-                                if let Some(imdb) = &response.imdb {
-                                    write!(f, "[imdbid-{}]", imdb) } 
-                                else { write!(f, "[tmdbid-{}]", response.tmdb) }
-                            }
-                            _ => write!(f, "[{r_status:?}] {}", show.src.to_string_lossy()),
-                        }
-                    }
-                    MediaItem::Movie(movie) => {
-                        let r_status = API_CALLS.get_query(inner).unwrap();
-                        match &*r_status {
-                            QueryStatus::Success(response) => {
-                                write!(f, "{} ({}) ", response.title, response.year);
-                                if let Some(imdb) = &response.imdb {
-                                    write!(f, "[imdbid-{}]", imdb) } 
-                                else { write!(f, "[tmdbid-{}]", response.tmdb) }
-                            }
-                            _ => write!(f, "[{r_status:?}] {}", movie.src.to_string_lossy()),
-                        }
-                    }
-                    MediaItem::Episode(ep) => {
-                        // I used to get a deadlock if I used `block_on` directly, but doing it this way is better
-                        // because there shouldn't be any risk of deadlocking in synchronous code.
-                        let parent_item = MediaItem::Show(Weak::upgrade(&ep.parent).unwrap());
-                        match (&*API_CALLS.get_query(&inner).unwrap(), &*API_CALLS.get_query(&parent_item).unwrap()) {
-
-                            (_, QueryStatus::Success(response)) => {
-                                write!(f, "{} ({}) ", response.title, response.year);
-                                if let Some(imdb) = &response.imdb {
-                                    write!(f, "[imdbid-{}]", imdb) } 
-                                else { write!(f, "[tmdbid-{}]", response.tmdb) }
-
-                                // match &*parent_guard {
-                                //     QueryStatus::Success(response) => write!(f, "{} {}", response.title.clone(), ep.id),
-                                //     QueryStatus::Failed(err)       => write!(f, "[Parent Failure]: {}", ep.src.to_string_lossy()),
-                                //     QueryStatus::NotStarted        => write!(f, "[Parent Empty]: {}", ep.src.to_string_lossy()),
-                                //     QueryStatus::InProgress        => write!(f, "Parent query is in progress: {}", ep.src.to_string_lossy()),
-                                // }
-                            },
-                            (_, _)
-                                => write!(f, "Parent query Failed: {}", ep.src.to_string_lossy()),
-                            _ => unreachable!()
-                        }
-
-                    }
-                }
-            }
-            TreeNode::Fail{ err, buf } => {
-                write!(f, "Parse Failure: {buf:?}")
-            }
-        }
-    }
-}

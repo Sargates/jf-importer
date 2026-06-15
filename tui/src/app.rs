@@ -14,13 +14,13 @@ use ratatui::{
 };
 
 use jf_import_library::{
-    media_catalog::{self, TreeGenError, MediaCatalog},
+    media::{self, tree::TreeGenError, MediaCatalog},
     config::{CONFIG, ConfigLoadError},
 };
 use tokio::{self, select, sync::watch};
 use futures::executor::block_on;
 
-use crate::widgets::{self, Renderable, TreeView, GeneratingView, error::*};
+use crate::widgets::{self, Renderable, CatalogView, GeneratingView, error::*};
 use crate::logging::*;
 
 #[derive(Default, Debug)]
@@ -43,7 +43,7 @@ enum AppState {
     #[default]
     Postinit,
     GeneratingTree(GeneratingView),
-    MillerColumnView(TreeView)
+    CatalogView(CatalogView)
 }
 #[derive(Default)]
 pub struct App {
@@ -84,9 +84,9 @@ impl App {
                 if view.is_complete() {
                     tracing::info!("View is completed!");
                     let ptr = Rc::new(view.take().unwrap());
-                    let tree_view = TreeView::new(ptr.clone()).map_err(|e| AppUpdateError::TreeViewError(e))?;
+                    let catalog_view = CatalogView::new(ptr.clone()).map_err(|e| AppUpdateError::TreeViewError(e))?;
                     self.tree = Some(ptr);
-                    self.state = AppState::MillerColumnView(tree_view);
+                    self.state = AppState::CatalogView(catalog_view);
                     return Ok(())
                 }
                 match view.poll().await {
@@ -94,7 +94,7 @@ impl App {
                     Err(err) => { Err(AppUpdateError::GeneratingViewError(err))?; }
                 }
             }
-            AppState::MillerColumnView(view) => {
+            AppState::CatalogView(view) => {
                 match view.update().await {
                     Ok(_) => {}
                     Err(e) => {}
@@ -105,11 +105,19 @@ impl App {
         Ok(())
     }
     fn draw(&mut self, frame: &mut Frame) {
+        //* stateful widget doesn't want to work with interior mutability, so we're back to this
+        // TODO: fix using interior mutability with stateful widget. build minimal working example
         match &self.state {
-            AppState::Postinit               => { self.default_background(frame) },
-            AppState::GeneratingTree(view)   => { self.default_background(frame); view.render(frame) },
-            AppState::MillerColumnView(view) => { view.render(frame) },
+            AppState::Postinit              => { self.default_background(frame) },
+            AppState::GeneratingTree(view)  => { self.default_background(frame) },
+            AppState::CatalogView(view)     => {},
         }
+        match &mut self.state {
+            AppState::Postinit              => {},
+            AppState::GeneratingTree(view)  => { view.render(frame) },
+            AppState::CatalogView(view)     => { view.render(frame) },
+        }
+
         match self.error {
             ErrorCatch::NoError => {}
             _ => {
@@ -207,7 +215,7 @@ impl App {
                         }
                     }
                     AppState::GeneratingTree(view) => {}, // no user input
-                    AppState::MillerColumnView(view) => view.handle_input(key_event.code)
+                    AppState::CatalogView(view) => view.handle_input(key_event.code)
                 }
             }
         }

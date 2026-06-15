@@ -8,9 +8,21 @@ use futures::executor::block_on;
 
 use regex::Regex;
 
-use crate::api::{QueryStatus, QueryResponse};
+use crate::api::client::{QueryStatus, QueryResponse};
 
-use crate::media_catalog::{TreeNode, MediaCreateError};
+use crate::media::tree::TreeNode;
+
+
+#[derive(Debug, Clone)]
+pub enum MediaCreateError {
+    FailedToCreateMediaItem,
+    PathNotUnicode,
+    IncorrectFileTypeSupplied,
+    EpisodeIncorrectFormat,
+    EpisodeFailedToParseSeason,
+}
+
+
 #[derive(Debug, Clone)]
 pub enum MediaItem {
     Movie(Arc<Movie>),

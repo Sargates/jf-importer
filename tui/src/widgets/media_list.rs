@@ -4,8 +4,8 @@ use ratatui::buffer::Buffer;
 use ratatui::widgets::{Widget, ListItem};
 use tokio::sync::Mutex;
 
-use jf_import_library::media_item::MediaItem;
-use jf_import_library::api::{QueryResponse, QueryStatus};
+use jf_import_library::media::types::MediaItem;
+use jf_import_library::api::client::{QueryResponse, QueryStatus};
 
 
 struct MediaList {}

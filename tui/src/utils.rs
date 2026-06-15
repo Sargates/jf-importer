@@ -1,6 +1,6 @@
-use jf_import_library::media_catalog;
+use jf_import_library::media::tree;
 
-pub fn recursive_print(node: &media_catalog::TreeNode, old_indent: String, print_failures: bool) {
+pub fn recursive_print(node: &tree::TreeNode, old_indent: String, print_failures: bool) {
     // `tree` ripoff
     const connector: &'static str = "│   ";
     const middle:    &'static str = "├── ";
@@ -8,7 +8,7 @@ pub fn recursive_print(node: &media_catalog::TreeNode, old_indent: String, print
     const empty:     &'static str = "    ";
 
     print!("{}", old_indent);
-    println!("{node}");
+    // println!("{node}");
 
     let mut next_indent = if old_indent.chars().count() > 3 {
         let split_point = old_indent.char_indices().rev().nth(3).map_or(0, |(idx, _)| idx);
@@ -23,7 +23,7 @@ pub fn recursive_print(node: &media_catalog::TreeNode, old_indent: String, print
     else { String::new() };
 
     match node {
-        media_catalog::TreeNode::Item{ inner, children } => {
+        tree::TreeNode::Item{ inner, children } => {
             for child in children {
                 let mut copy = next_indent.clone();
                 let last = children.last().unwrap();
@@ -34,7 +34,7 @@ pub fn recursive_print(node: &media_catalog::TreeNode, old_indent: String, print
                 recursive_print(child, copy.clone(), print_failures);
             }
         }
-        media_catalog::TreeNode::Category { name, children } => {
+        tree::TreeNode::Category { name, children } => {
             if name == "Failures" && !print_failures { return; }
             for child in children {
                 let mut copy = next_indent.clone();

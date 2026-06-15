@@ -13,13 +13,16 @@ use tokio::select;
 
 use std::cell::RefCell;
 
-use jf_import_library::api::QueryError;
-use jf_import_library::media_catalog::{MediaCatalog, TreeGenError, TreeNode};
-use jf_import_library::media_item::MediaItem;
-use jf_import_library::media_catalog;
+use jf_import_library::api::{client::QueryStatus, error::QueryError};
+use jf_import_library::media::{
+    MediaCatalog,
+    types::MediaItem,
+    tree::{TreeGenError, TreeNode}
+};
+use jf_import_library::media;
 use jf_import_library::config::*;
 
-use super::Renderable;
+use super::{BrailleLoadingIcon, Renderable};
 
 #[derive(Debug)]
 pub enum GeneratingViewError {
@@ -36,7 +39,6 @@ pub struct GeneratingView {
 
     last: (String, String),
     buffer: RefCell<ModalBuffer>
-    
 }
 impl GeneratingView {
     pub fn new() -> Self {
@@ -94,35 +96,50 @@ impl GeneratingView {
     pub fn take(&mut self) -> Option<MediaCatalog> { self.completed.take() }
 }
 
+// making this a doccomment so code has syntax highlighting
+/// TODO: This should be its own widget
+/// It should contain more than just a single Option<Buffer> because that makes this whole struct is redundant. It should be its own Widget and it should support getting a Buffer that represents the contents within the Border
+/// ```rust
+/// // self.buffer should become `Option<ModalBuffer>`
+/// struct ModalBuffer {
+///     inner_buf: Buffer,
+///     bordered: Block, // block with a border
+///     inner: Box<impl Widget> // or whatever the syntax is
+/// }
+/// impl ModalBuffer {
+///         Self { inner: Buffer::new(area) }
+///     }
+/// }
+/// ```
 #[derive(Default)]
 struct ModalBuffer {
     inner: Option<Buffer>
 }
 impl ModalBuffer {
-    pub fn is_unset(&self) -> bool { self.inner.is_none() }
-    pub fn generate(&mut self, frame_area: Rect) {
-        let [_, rect] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .areas(frame_area);
-        let [_, rect] = Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .areas(rect);
-        self.inner = Some(Buffer::empty(rect))
-    }
-    pub fn set(&mut self, inner: Buffer) {
-        self.inner = Some(inner)
-    }
-    pub fn take(&mut self) -> Option<Buffer> {
-        self.inner.take()
-    }
+    pub fn new() -> Self 
+        { Self{ inner: None } }
+    pub fn generate(&mut self, rect: Rect) 
+        { self.inner = Some(Buffer::empty(rect)) }
+    pub fn is_unset(&self) -> bool 
+        { self.inner.is_none() }
+    pub fn set(&mut self, inner: Buffer) 
+        { self.inner = Some(inner) }
+    pub fn take(&mut self) -> Option<Buffer> 
+        { self.inner.take() }
 }
-impl Renderable for GeneratingView {
-    fn render(&self, frame: &mut ratatui::Frame)
+impl Renderable for &mut GeneratingView {
+    fn render(self, frame: &mut ratatui::Frame)
     where
         Self: Sized {
         let mut borrow_mut = self.buffer.borrow_mut();
         let mut buffer = match borrow_mut.take() {
             Some(buffer) => buffer,
             None => {
-                borrow_mut.generate(frame.area());
+                let [_, rect] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
+                    .areas(frame.area());
+                let [_, rect] = Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)])
+                    .areas(rect);
+                borrow_mut.generate(rect);
                 borrow_mut.take().unwrap()
             }
         };
@@ -132,6 +149,7 @@ impl Renderable for GeneratingView {
         if self.last.0 == self.last.1 { return; }
         
         let popup_block = Block::bordered()
+            .border_type(BorderType::Rounded)
             .title(" Generating Media Catalog ")
             .merge_borders(symbols::merge::MergeStrategy::Fuzzy)
         ;
@@ -179,5 +197,5 @@ impl Renderable for GeneratingView {
         borrow_mut.set(new_inner)
     }
 
-    fn handle_input(&mut self, key: crossterm::event::KeyCode) {}
+    fn handle_input(self, key: crossterm::event::KeyCode) {}
 }

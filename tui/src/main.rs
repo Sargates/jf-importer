@@ -23,11 +23,11 @@ use app::App;
 use logging::*;
 
 use jf_import_library::api::*;
-use jf_import_library::media_item::{Movie, Show, Episode};
+use jf_import_library::media::types::{Movie, Show, Episode};
 use jf_import_library::config::*;
 
 //* TESTING IMPORTS
-use jf_import_library::media_catalog::MediaCatalog;
+use jf_import_library::media::MediaCatalog;
 
 fn post_init() {
     // Post-init checks
@@ -41,7 +41,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("LOG_ENV: {}", LOG_ENV.clone());
     println!("LOG_FILE: {}", LOG_FILE.clone());
     println!("data_dir: {:?}", get_data_dir());
-    // ''
 
     println!("CARGO_CRATE_NAME: {}", env!("CARGO_CRATE_NAME"));
     println!("CONFIG.clone(): {:#?}", CONFIG.clone());

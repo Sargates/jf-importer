@@ -1,13 +1,15 @@
-use std::sync::Arc;
-use tokio::sync::Mutex;
-use async_trait::async_trait;
+pub mod error;
 
-use crate::media_item::{Movie, Show};
-
-mod api_common;
-mod api_store;
 mod tmdb;
-pub use tmdb::*;
-pub use api_common::*;
-pub use api_store::*;
+mod api_common;
+mod api_call;
+
+pub mod calls {
+    pub use super::api_call::*;
+}
+pub mod client {
+    pub use super::api_common::*;
+    pub use super::tmdb::*;
+    // pub use super::omdb::*;
+}
 
