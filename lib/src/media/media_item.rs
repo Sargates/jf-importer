@@ -49,11 +49,19 @@ impl PartialEq for MediaItem {
     }
 }
 impl Eq for MediaItem {}
+impl MediaItem {
+    pub fn raw_media_label(&self) -> String {
+        match self {
+            MediaItem::Movie(movie) => { movie.raw_media_label() }
+            MediaItem::Show(show)   => { show.raw_media_label() }
+            MediaItem::Episode(ep)  => { ep.raw_media_label() }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Movie {
     pub src: PathBuf,
-    // pub query: Mutex<QueryStatus>,
 }
 impl Movie {
     // TODO: How does this work for testing? How do we create dummy movies/episodes for testing?
@@ -65,12 +73,14 @@ impl Movie {
         let query = Mutex::new(QueryStatus::NotStarted);
         Ok(Movie{ src })
     }
+    pub fn raw_media_label(&self) -> String {
+        self.src.file_stem().unwrap().to_string_lossy().to_string()
+    }
 }
 
 #[derive(Debug)]
 pub struct Show {
     pub src: PathBuf, // directory containing show
-    // pub query: Mutex<QueryStatus>,
     pub episodes: Mutex<Vec<Arc<Episode>>>,
 }
 impl Show {
@@ -84,6 +94,9 @@ impl Show {
         let query = Mutex::new(QueryStatus::NotStarted);
         let episodes = Mutex::new(vec![]);
         Ok(Show{ src, episodes })
+    }
+    pub fn raw_media_label(&self) -> String {
+        self.src.file_name().unwrap().to_string_lossy().to_string()
     }
 }
 
@@ -110,7 +123,6 @@ pub struct Episode {
     pub src: PathBuf,
     pub id: EpisodeId,
     pub parent: Weak<Show>,
-    // pub query: Mutex<QueryStatus>,
 }
 impl Episode {
     // Most of this is grandfathered from pre-refactor. This code may be shit
@@ -146,6 +158,9 @@ impl Episode {
         let query = Mutex::new(QueryStatus::NotStarted);
 
         Ok(Episode{ src, id, parent })
+    }
+    pub fn raw_media_label(&self) -> String {
+        self.id.to_string()
     }
 }
 

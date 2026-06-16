@@ -56,39 +56,10 @@ impl Widget for &MediaList {
         let items: Vec<ListItem> = self.inner
             .iter()
             .map(|item| {
-
                 let name = match &*item.status {
-                    QueryStatus::Success(response) => {
-                        response.title.clone()
-                    },
-                    _ => {
-                        match &item.inner {
-                            MediaItem::Movie(movie) => {
-                                movie.src.file_stem().unwrap().to_string_lossy().to_string()
-                            }
-                            MediaItem::Show(show) => {
-                                show.src.file_name().unwrap().to_string_lossy().to_string()
-                            }
-                            MediaItem::Episode(ep)   => {
-                                ep.id.to_string()
-                            }
-                        }
-                    }
+                    QueryStatus::Success(response) => { response.title.clone() },
+                    _ => { item.inner.raw_media_label() }
                 };
-
-                // TODO: make these tests
-                // if debug {
-                //     tracing::info!("[PADDING] Name:           {}", name);
-                //     tracing::info!("[PADDING] Bytes:          {:?}", name.bytes());
-                //     tracing::info!("[PADDING] Label:          {}", label);
-                //     tracing::info!("[PADDING] Name Len:       {}", name.len());
-                //     tracing::info!("[PADDING] Name Max:       {}", name_max);
-                //     tracing::info!("[PADDING] Label Len:      {}", label.len());
-                //     tracing::info!("[PADDING] Padding Len:    {}", padding.len());
-                //     // tracing::info!("[PADDING] Calculated:     {}", out);
-                //     tracing::info!("[PADDING] Calculated Len: {}", out.len());
-                // }
-                // // assert_eq!(out.len(), width);
 
                 Line::from(name).left_aligned().into()
             })
