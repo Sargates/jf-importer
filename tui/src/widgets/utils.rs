@@ -1,19 +1,25 @@
 use std::time::{Duration, Instant};
+use std::rc::Rc;
+use std::cell::RefCell;
 
 use ratatui::text::Span;
 use ratatui::style::{Color,Stylize};
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
-pub const BRAILLE: [char; 8] = [
-    '⢿',
-    '⣻',
-    '⣽',
-    '⣾',
-    '⣷',
-    '⣯',
-    '⣟',
-    '⡿',
+use tokio::sync::watch;
+
+use once_cell::sync::Lazy;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+pub static BRAILLE: Lazy<Arc<Mutex<BrailleLoadingIcon>>> = Lazy::new(|| {
+    Default::default()
+});
+
+const braille_states: [char; 8] = [
+    '⠇', '⠋', '⠙', '⠸', '⢰', '⣠', '⣄', '⡆'
+    // '⢿', '⣻', '⣽', '⣾', '⣷', '⣯', '⣟', '⡿',
 ];
 
 pub struct BrailleLoadingIcon {
@@ -38,7 +44,7 @@ impl Default for BrailleLoadingIcon {
 }
 impl Into<String> for &BrailleLoadingIcon {
     fn into(self) -> String {
-        BRAILLE[self.index].to_string()
+        braille_states[self.index].to_string()
     }
 }
 

@@ -51,10 +51,6 @@ pub struct CatalogView {
     
     api_manifest: ApiManifest,
     api_client: Arc<dyn api::client::ApiClient + Send + Sync>,
-
-    poll_futures: bool,
-
-    loading_icon: Rc<RefCell<BrailleLoadingIcon>>,
 }
 impl CatalogView {
     pub fn new(catalog: Rc<MediaCatalog>) -> Result<Self, TreeViewError> {
@@ -74,8 +70,6 @@ impl CatalogView {
 
             api_client: Arc::new(TMDBClient::new()),
             api_manifest: ApiManifest::new(),
-            poll_futures: false, // don't do something the user may not expect
-            loading_icon: Default::default(),
         };
 
         view.stage_api_calls();
@@ -89,27 +83,28 @@ impl CatalogView {
                 .map(|s| MediaItem::Show(s.clone()));
             self.media_list = movies.chain(shows).collect()
         }
-        if self.poll_futures && !self.api_manifest.is_empty() {
-            select! {
-                Some(result) = self.api_manifest.next() => {
-                    match &result.status {
-                        QueryStatus::Success(response) => tracing::info!(
-                            "[Success] Result: src -> {:?}",
-                            format!("{} ({}) [tmdbid-{}]", response.title, response.year, response.tmdb)
-                        ),
-                        QueryStatus::Failed(query_error) => tracing::error!(
-                            "[Failure] Failed to query API: {:?}",
-                            query_error
-                        ),
-                        _ => {}
-                    }
-                    let mut lock = self.api_manifest.lock().await;
-                    lock.insert(result.item, Rc::new(result.status));
+        select! {
+            Some(result) = self.api_manifest.next(), if !self.api_manifest.is_empty() => {
+                match &result.status {
+                    QueryStatus::Success(response) => tracing::info!(
+                        "[Success] Result: src -> {:?}",
+                        format!("{} ({}) [tmdbid-{}]", response.title, response.year, response.tmdb)
+                    ),
+                    QueryStatus::Failed(query_error) => tracing::error!(
+                        "[Failure] Failed to query API: {:?}",
+                        query_error
+                    ),
+                    _ => {}
                 }
-                _ = futures::future::ready(()) => {} // non-blocking await
+                let mut lock = self.api_manifest.lock().await;
+                lock.insert(result.item, Rc::new(result.status));
             }
+            _ = futures::future::ready(()) => {} // non-blocking await
         }
-        self.loading_icon.borrow_mut().tick_next();
+        match BRAILLE.try_lock() {
+            Ok(mut lock) => lock.tick_next(),
+            Err(err) => tracing::error!("Failed to acquire lock for ticking: Err: {}", err),
+        };
         Ok(())
     }
     fn stage_api_calls(&mut self) {
@@ -142,15 +137,17 @@ impl CatalogView {
     fn select_next(&self) {
         let mut lock = self.view_state.borrow_mut();
         match lock.selected() {
-            Some(index) => { lock.select_next(); }
+            Some(index) if index < self.media_list.len()-1 => { lock.select_next(); }
             None => { lock.select(Some(0)); }
+            Some(_) => {}
         }
     }
     fn select_previous(&self) {
         let mut lock = self.view_state.borrow_mut();
         match lock.selected() {
-            Some(index) => { lock.select_previous(); }
+            Some(index) if index >= 1 => { lock.select_previous(); }
             None => { lock.select(Some(0)); }
+            Some(_) => {}
         }
     }
 }
@@ -158,70 +155,8 @@ impl CatalogView {
 // TODO: do this properly
 // `into` and `from` are fucking annoying, create a separate file for all the 
 // "sub-widgets" we want to display in a `CatalogView`. single-line, fold, media info, fold info
-/// we require passing a shared reference to a `MediaItem` because Rust doesn't know about 
-/// that `MediaItem` is a wrapper for `Rc`. maybe there's a better way to do this, but whateveR
-// fn media_to_list_item<'a>(item: &'a MediaItem, status: Option<Rc<QueryStatus>>, width: usize, debug: bool) -> ListItem<'a> {
-// }
+//? What did I mean by "fold"? as in folding episodes within a show?
 
-struct CatalogListItem {
-    item: MediaItem,
-    status: Option<Rc<QueryStatus>>,
-    width: usize,
-    loading: Rc<RefCell<BrailleLoadingIcon>>
-}
-impl<'a> Into<Text<'a>> for &CatalogListItem {
-    fn into(self) -> Text<'a> {
-        let status = match &self.status {
-            Some(status) => { status },
-            None => { return Text::from(Line::default().spans(vec![Span::from(format!("Item not in List: {:?}", self.item))])); },
-        };
-        let name = match status.as_ref() {
-            QueryStatus::Success(response) => {
-                response.title.clone()
-            },
-            _ => {
-                match &self.item {
-                    MediaItem::Movie(movie) => {
-                        movie.src.file_stem().unwrap().to_string_lossy().to_string()
-                    }
-                    MediaItem::Show(show) => {
-                        show.src.file_name().unwrap().to_string_lossy().to_string()
-                    }
-                    MediaItem::Episode(ep)   => {
-                        ep.id.to_string()
-                    }
-                }
-            }
-        };
-        let label: String = match status.as_ref() {
-            QueryStatus::NotStarted => "[Not Started]".into(),
-            QueryStatus::InProgress => (&*self.loading.borrow()).into(),
-            QueryStatus::Failed(query_error) => "[ ✗ ]".into(),
-            QueryStatus::Success(query_response) => "[ ✓ ]".into(),
-        };
-        let label_len = label.graphemes(true).count();
-        let name_max = if name.graphemes(true).count() < self.width-label_len {
-            name.graphemes(true).count() } 
-        else { self.width-label_len };
-        let padding = String::from(" ").repeat(self.width-name_max-label_len);
-        let out: String = name.graphemes(true).take(name_max).collect::<String>() + &padding + &label;
-
-        // TODO: make these tests
-        // if debug {
-        //     tracing::info!("[PADDING] Name:           {}", name);
-        //     tracing::info!("[PADDING] Bytes:          {:?}", name.bytes());
-        //     tracing::info!("[PADDING] Label:          {}", label);
-        //     tracing::info!("[PADDING] Name Len:       {}", name.len());
-        //     tracing::info!("[PADDING] Name Max:       {}", name_max);
-        //     tracing::info!("[PADDING] Label Len:      {}", label.len());
-        //     tracing::info!("[PADDING] Padding Len:    {}", padding.len());
-        //     // tracing::info!("[PADDING] Calculated:     {}", out);
-        //     tracing::info!("[PADDING] Calculated Len: {}", out.len());
-        // }
-        // // assert_eq!(out.len(), width);
-        Text::from(out)
-    }
-}
 impl Renderable for &mut CatalogView {
     fn render(self, frame: &mut ratatui::Frame) {
         let instructions = Line::from(vec![
@@ -261,57 +196,39 @@ impl Renderable for &mut CatalogView {
             .border_type(BorderType::Rounded)
             .merge_borders(symbols::merge::MergeStrategy::Fuzzy);
 
-        let items: Vec<ListItem> = self.media_list
+        let lock = self.view_state.borrow();
+        let items = MediaList::from_iter(self.media_list
             .iter()
             .map(|media| {
                 // this shouldn't fail, we don't do multithreading and we 
                 // don't hold the lock across `await`s
                 let lock = self.api_manifest.try_lock().unwrap();
-                let status = lock.get(&media).map(|r| r.clone());
+                let status = match lock.get(&media) {
+                    Some(rc) => rc.clone(),
+                    None => Rc::new(QueryStatus::NotStarted),
+                };
                 drop(lock);
 
-                // why doesn't the compiler throw a fit about `media` going out of scope after this function call
-                //? because of the lifetime annotations on `media_to_list_item`
-                (&CatalogListItem {
-                    item: media.clone(),
+                MediaListItem {
+                    inner: media.clone(),
                     status,
-                    width: block.inner(outer_layout[1]).width.into(),
-                    loading: self.loading_icon.clone()
-                }).into()
-                // media_to_list_item(media, status, block.inner(outer_layout[1]).width.into(), self.poll_futures)
-            })
-            .collect()
+                }
+            }))
+            .set_state(lock.clone())
         ;
+        items.render(outer_layout[1], frame.buffer_mut());
 
-        // left title block
-        let left_title = block.clone()
-            .title_alignment(Alignment::Left)
-            .title(" Media Item ".add_modifier(Modifier::REVERSED).bold());
-        let dummy = Paragraph::new("")
-            .block(left_title);
-        Widget::render(dummy, outer_layout[1], frame.buffer_mut());
-        let right_title = block.clone()
-            .title_alignment(Alignment::Right)
-            .title(" Api Call Status ".add_modifier(Modifier::REVERSED).bold());
-        let list = List::new(items)
-            .block(right_title)
-            .highlight_style(Style::new().bg(SLATE.c800).add_modifier(Modifier::BOLD))
-            // .highlight_symbol("> ") // there's no easy way to add padding like this and size the whole widget programatically based on it
-            .highlight_spacing(HighlightSpacing::Always)
-            .scroll_padding(10)
-        ;
+        let mut lock = match BRAILLE.try_lock() {
+            Ok(lock) => lock,
+            Err(err) => return,
+        };
 
-        // draw media list (middle column
-        let mut lock = self.view_state.borrow_mut();
-        StatefulWidget::render(list, outer_layout[1], frame.buffer_mut(), &mut lock);
-
+        // Filler until I decide how to populate this empty space
         Paragraph::new("").block(block.clone())
             .render(outer_layout[0], frame.buffer_mut());
-        Paragraph::new::<String>((&*self.loading_icon.borrow_mut()).into()).block(block.clone())
+        Paragraph::new::<String>((&*lock).into()).block(block.clone())
             .render(outer_layout[2], frame.buffer_mut());
-        
-
-        // frame.render_widget(&mut *borrow_mut, frame.area());
+        drop(lock);
     }
     fn handle_input(self, code: crossterm::event::KeyCode) {
         // let mut lock = self.view_state.borrow_mut();
@@ -322,14 +239,10 @@ impl Renderable for &mut CatalogView {
             crossterm::event::KeyCode::Char('k') => {
                 self.select_previous();
             }
-            crossterm::event::KeyCode::Char('l') => {
-                // self.columns.borrow_mut().step_into();
-            }
-            crossterm::event::KeyCode::Char('h') => {
-                // self.columns.borrow_mut().step_out();
-            }
+            crossterm::event::KeyCode::Char('l') => {}
+            crossterm::event::KeyCode::Char('h') => {}
             crossterm::event::KeyCode::Char('p') => {
-                self.poll_futures = true;
+                self.api_manifest.send();
                 let mut lock = self.api_manifest.try_lock().unwrap();
                 for k in self.media_list.iter() {
                     lock.insert(k.clone(), Rc::new(QueryStatus::InProgress));
