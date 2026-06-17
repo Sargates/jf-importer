@@ -25,9 +25,8 @@ use jf_import_library::api::{
 };
 // use jf_import_library::api::{self, ApiCall, ApiCallFuture, ApiManifest, QueryStatus, TMDBClient, error::QueryError};
 use jf_import_library::media::{
-    MediaCatalog, 
-    types::MediaItem, 
-    tree::{TreeGenError, TreeNode}
+    Catalog, 
+    MediaItem, 
 };
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -44,45 +43,32 @@ pub enum TreeViewError {
     EmptyTree
 }
 pub struct CatalogView {
-    catalog: Rc<MediaCatalog>,
+    catalog: Catalog,
 
-    media_list: Vec<MediaItem>,
     view_state: RefCell<ListState>,
     
     api_manifest: ApiManifest,
     api_client: Arc<dyn api::client::ApiClient + Send + Sync>,
 }
 impl CatalogView {
-    pub fn new(catalog: Rc<MediaCatalog>) -> Result<Self, TreeViewError> {
-        // let state = if catalog.movies.len()+catalog.shows.len() > 0 {
-        //        ListState::default().with_selected(Some(0)) }
-        // else { ListState::default() };
+    pub fn new(catalog: Catalog) -> Result<Self, TreeViewError> {
         let mut state = ListState::default();
-        if catalog.movies.len()+catalog.shows.len() > 0 { state = state.with_selected(Some(0)); }
-        tracing::info!("Total media items while creating view: {}", catalog.movies.len()+catalog.shows.len());
+        if catalog.iter_all().count() > 0 { state = state.with_selected(Some(0)); } // autoselect first element
+        tracing::info!("Total media items while creating view: {}", catalog.iter_all().count());
         tracing::info!("New State: {:?}", state.selected());
 
         let mut view = CatalogView {
             catalog,
-
-            media_list: Vec::new(),
             view_state: RefCell::new(state),
 
             api_client: Arc::new(TMDBClient::new()),
-            api_manifest: ApiManifest::new(),
+            api_manifest: ApiManifest::new()
         };
 
         view.stage_api_calls();
         Ok(view)
     }
     pub async fn update(&mut self) -> Result<(), TreeViewUpdateError> {
-        if self.catalog.movies.len()+self.catalog.shows.len() != self.media_list.len() {
-            let movies = self.catalog.movies.iter()
-                .map(|m| MediaItem::Movie(m.clone()));
-            let shows = self.catalog.shows.iter()
-                .map(|s| MediaItem::Show(s.clone()));
-            self.media_list = movies.chain(shows).collect()
-        }
         select! {
             Some(result) = self.api_manifest.next(), if !self.api_manifest.is_empty() => {
                 match &result.status {
@@ -109,7 +95,7 @@ impl CatalogView {
     }
     fn stage_api_calls(&mut self) {
         // TODO: remove these redundant `enumerate` calls
-        for (idx, movie) in self.catalog.movies.iter().enumerate() {
+        for movie in self.catalog.iter_movies() {
             let movie = MediaItem::Movie(movie.clone());
             let client = self.api_client.clone();
             let future = ApiCallFuture::new(movie.clone(), client);
@@ -122,7 +108,7 @@ impl CatalogView {
         }
 
         // TODO: remove these redundant `enumerate` calls
-        for (idx, show) in self.catalog.shows.iter().enumerate() {
+        for show in self.catalog.iter_shows() {
             let show = MediaItem::Show(show.clone());
             let client = self.api_client.clone();
             let future = ApiCallFuture::new(show.clone(), client);
@@ -137,7 +123,7 @@ impl CatalogView {
     fn select_next(&self) {
         let mut lock = self.view_state.borrow_mut();
         match lock.selected() {
-            Some(index) if index < self.media_list.len()-1 => { lock.select_next(); }
+            Some(index) if index < self.catalog.iter_all().count()-1 => { lock.select_next(); }
             None => { lock.select(Some(0)); }
             Some(_) => {}
         }
@@ -197,8 +183,7 @@ impl Renderable for &mut CatalogView {
             .merge_borders(symbols::merge::MergeStrategy::Fuzzy);
 
         let lock = self.view_state.borrow();
-        let items = MediaList::from_iter(self.media_list
-            .iter()
+        let items = MediaList::from_iter(self.catalog.iter_all()
             .map(|media| {
                 // this shouldn't fail, we don't do multithreading and we 
                 // don't hold the lock across `await`s
@@ -244,7 +229,7 @@ impl Renderable for &mut CatalogView {
             crossterm::event::KeyCode::Char('p') => {
                 self.api_manifest.send();
                 let mut lock = self.api_manifest.try_lock().unwrap();
-                for k in self.media_list.iter() {
+                for k in self.catalog.iter_all() {
                     lock.insert(k.clone(), Rc::new(QueryStatus::InProgress));
                 }
             }

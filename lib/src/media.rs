@@ -1,10 +1,8 @@
-mod media_catalog;
+mod catalog;
+mod catalog_builder;
 mod media_item;
-pub mod tree;
 
-pub use media_catalog::*;
-// pub use tree::*;
+pub use catalog::*;
+pub use catalog_builder::*;
+pub use media_item::{Movie,Show,Episode,MediaItem,MediaCreateError};
 
-pub mod types {
-    pub use super::media_item::{Movie,Show,Episode,MediaItem,MediaCreateError};
-}

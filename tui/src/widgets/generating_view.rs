@@ -15,9 +15,7 @@ use std::cell::RefCell;
 
 use jf_import_library::api::{client::QueryStatus, error::QueryError};
 use jf_import_library::media::{
-    MediaCatalog,
-    types::MediaItem,
-    tree::{TreeGenError, TreeNode}
+    Catalog, CatalogBuilder, CatalogBuildError,
 };
 use jf_import_library::media;
 use jf_import_library::config::*;
@@ -27,26 +25,27 @@ use super::{BrailleLoadingIcon, Renderable};
 #[derive(Debug)]
 pub enum GeneratingViewError {
     GeneratingThreadPanic(tokio::task::JoinError),
-    TreeGenError(TreeGenError),
+    CatalogGenError(CatalogBuildError),
     Timeout,
     RecvError(watch::error::RecvError)
 }
 
 pub struct GeneratingView {
-    thread_handle: JoinHandle<Result<MediaCatalog, TreeGenError>>,
+    thread_handle: JoinHandle<Result<Catalog, CatalogBuildError>>,
     subscriber: watch::Receiver<String>,
-    completed: Option<MediaCatalog>,
+    completed: Option<Catalog>,
 
     last: (String, String),
     buffer: RefCell<ModalBuffer>
 }
 impl GeneratingView {
     pub fn new() -> Self {
-        let catalog = MediaCatalog::new(CONFIG.clone());
-        let subscriber = catalog.subscribe();
+        let builder = CatalogBuilder::new(CONFIG.clone());
+        // this subscriber needs to be properly handled after we call `builder.build`
+        let subscriber = builder.subscribe();
         let thread_handle = tokio::task::spawn_blocking(move || {
             tracing::info!("Creating GeneratingView");
-            let res = catalog.generate_catalog_tree();
+            let res = builder.build();
             tracing::info!("Finished GeneratingView");
             res
         });
@@ -64,7 +63,7 @@ impl GeneratingView {
                 match res {
                     Ok(owned) => {
                         tracing::info!("Finished!!!");
-                        self.completed = Some(owned.map_err(|e| GeneratingViewError::TreeGenError(e))?);
+                        self.completed = Some(owned.map_err(|e| GeneratingViewError::CatalogGenError(e))?);
                     }
                     Err(e) => {
                         tracing::error!("Failed to join thread while generating media catalog! Error: {:?}", e);
@@ -93,7 +92,7 @@ impl GeneratingView {
         Ok(())
     }
     pub fn is_complete(&self) -> bool { self.completed.is_some() }
-    pub fn take(&mut self) -> Option<MediaCatalog> { self.completed.take() }
+    pub fn take(&mut self) -> Option<Catalog> { self.completed.take() }
 }
 
 // making this a doccomment so code has syntax highlighting

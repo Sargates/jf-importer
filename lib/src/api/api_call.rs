@@ -3,7 +3,6 @@ use std::rc::Rc;
 use std::pin::Pin;
 use std::cell::{Ref, RefMut};
 
-// use dashmap::DashMap;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -16,7 +15,7 @@ use tokio::sync::{Mutex, MutexGuard, TryLockError};
 
 use crate::media::*;
 use crate::api::client::{ApiClient, QueryStatus, QueryResponse};
-use crate::media::types::MediaItem;
+use crate::media::MediaItem;
 
 pub struct ApiCallFuture {
     client: Arc<dyn ApiClient + Sync + Send>,
@@ -26,7 +25,7 @@ impl ApiCallFuture {
     pub fn new(item: MediaItem, client: Arc<dyn ApiClient + Sync + Send>) -> Self {
         Self {
             client,
-            inner: Box::pin(futures::future::pending()) // this is going to be really annoying to debug if it ever causes a deadlock. I am going to forget about this line
+            inner: Box::pin(futures::future::pending())
         }.init(item)
     }
     // I don't want to deal with lifetime syntax
@@ -40,7 +39,6 @@ impl ApiCallFuture {
                 MediaItem::Show(show) => client.search_show(show).await,
                 MediaItem::Episode(episode) => todo!(),
             };
-            tokio::time::sleep(Duration::from_secs(4)).await;
             ApiCall {
                 item,
                 status
@@ -67,6 +65,7 @@ pub struct ApiCall {
 pub struct ApiManifest {
     // api_count: u32, // TODO: support tracking how many API calls are made for a single Future<T>
     outgoing: FuturesUnordered<ApiCallFuture>,
+    //? Does this have to be in a mutex? I don't see anything immediately that says it does
     api_results: Mutex<HashMap<MediaItem, Rc<QueryStatus>>>,
     released: bool, // send all api calls
 }

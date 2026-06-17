@@ -4,6 +4,7 @@ use std::rc::Rc;
 use crossterm::{
     event::{self, KeyEventKind, KeyCode, Event, KeyEvent},
 };
+
 use futures::FutureExt;
 use ratatui::{
     *,
@@ -14,9 +15,10 @@ use ratatui::{
 };
 
 use jf_import_library::{
-    media::{self, tree::TreeGenError, MediaCatalog},
+    media::{self, CatalogBuildError, Catalog},
     config::{CONFIG, ConfigLoadError},
 };
+
 use tokio::{self, select, sync::watch};
 use futures::executor::block_on;
 
@@ -27,7 +29,7 @@ use crate::logging::*;
 enum ErrorCatch {
     #[default]
     NoError,
-    FailedToGenerateTree(TreeGenError),
+    FailedToGenerateCatalog(CatalogBuildError),
     AppUpdateError(AppUpdateError)
 }
 
@@ -42,12 +44,13 @@ enum AppUpdateError {
 enum AppState {
     #[default]
     Postinit,
-    GeneratingTree(GeneratingView),
+    GeneratingCatalog(GeneratingView),
     CatalogView(CatalogView)
 }
+
 #[derive(Default)]
 pub struct App {
-    tree: Option<Rc<MediaCatalog>>,
+    tree: Option<Rc<Catalog>>,
     state: AppState,
     error: ErrorCatch,
     exit: bool,
@@ -80,12 +83,12 @@ impl App {
     }
     async fn update(&mut self) -> Result<(), AppUpdateError> {
         match &mut self.state {
-            AppState::GeneratingTree(view) => {
+            AppState::GeneratingCatalog(view) => {
                 if view.is_complete() {
                     tracing::info!("View is completed!");
-                    let ptr = Rc::new(view.take().unwrap());
-                    let catalog_view = CatalogView::new(ptr.clone()).map_err(|e| AppUpdateError::TreeViewError(e))?;
-                    self.tree = Some(ptr);
+                    let ptr = view.take().unwrap();
+                    let catalog_view = CatalogView::new(ptr).map_err(|e| AppUpdateError::TreeViewError(e))?;
+                    // self.tree = Some(ptr);
                     self.state = AppState::CatalogView(catalog_view);
                     return Ok(())
                 }
@@ -109,12 +112,12 @@ impl App {
         // TODO: fix using interior mutability with stateful widget. build minimal working example
         match &self.state {
             AppState::Postinit              => { self.default_background(frame) },
-            AppState::GeneratingTree(view)  => { self.default_background(frame) },
+            AppState::GeneratingCatalog(view)  => { self.default_background(frame) },
             AppState::CatalogView(view)     => {},
         }
         match &mut self.state {
             AppState::Postinit              => {},
-            AppState::GeneratingTree(view)  => { view.render(frame) },
+            AppState::GeneratingCatalog(view)  => { view.render(frame) },
             AppState::CatalogView(view)     => { view.render(frame) },
         }
 
@@ -209,12 +212,12 @@ impl App {
                         match key_event.code {
                             KeyCode::Char('p') => {
                                 let res = GeneratingView::new();
-                                self.state = AppState::GeneratingTree(res)
+                                self.state = AppState::GeneratingCatalog(res)
                             }
                             _ => {}
                         }
                     }
-                    AppState::GeneratingTree(view) => {}, // no user input
+                    AppState::GeneratingCatalog(view) => {}, // no user input
                     AppState::CatalogView(view) => view.handle_input(key_event.code)
                 }
             }

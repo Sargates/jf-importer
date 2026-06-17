@@ -23,11 +23,11 @@ use app::App;
 use logging::*;
 
 use jf_import_library::api::*;
-use jf_import_library::media::types::{Movie, Show, Episode};
+use jf_import_library::media::{Movie, Show, Episode};
 use jf_import_library::config::*;
 
 //* TESTING IMPORTS
-use jf_import_library::media::MediaCatalog;
+use jf_import_library::media::Catalog;
 
 fn post_init() {
     // Post-init checks

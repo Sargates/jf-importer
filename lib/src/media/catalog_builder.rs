@@ -8,51 +8,58 @@ use regex::Regex;
 use ignore::*;
 
 use tokio::sync::{Mutex, watch};
-use futures::executor::block_on;
 
-use crate::media::types::{Episode, MediaItem, Movie, Show};
-use crate::media::tree::{TreeNode, TreeGenError};
+use crate::media::{Episode, MediaItem, Movie, Show, Catalog, MediaCreateError};
 use crate::api::{
     calls::ApiManifest,
     client::{QueryResponse, QueryStatus}
 };
 use crate::config::{Config,CONFIG,Secrets,SECRETS};
 
-pub struct MediaCatalog {
-    pub config: Config,
-    pub movies: Vec<Arc<Movie>>,
-    pub shows: Vec<Arc<Show>>,
-    pub episodes: Vec<Arc<Episode>>,
-    pub tree: TreeNode,
-    // pub manifest: Option<ApiManifest>,
+#[derive(Debug)]
+pub enum CatalogBuildError {
+    EnvVarNotSet,
+    EnvVarNotUnicode(OsString),
+    MoviesDirDoesntExist,
+    ShowsDirDoesntExist,
+    RegexError(regex::Error),
+    StatusReportSendError(watch::error::SendError<String>)
+}
+impl From<regex::Error> for CatalogBuildError {
+    fn from(value: regex::Error) -> Self { Self::RegexError(value) }
+}
+impl From<watch::error::SendError<String>> for CatalogBuildError {
+    fn from(value: watch::error::SendError<String>) -> Self { Self::StatusReportSendError(value) }
+}
+
+pub struct CatalogBuilder {
+    config: Config,
     what_i_am_doing: watch::Sender<String>,
 }
 
-// TODO: Move this to a dedicated `MediaCatalogBuilder` type
-impl MediaCatalog {
-    pub fn new(config: Config) -> MediaCatalog {
+pub struct CatalogFailure {
+    pub err: MediaCreateError,
+    pub buf: PathBuf
+}
+
+impl CatalogBuilder {
+    pub fn new(config: Config) -> Self {
         let (tx, _) = watch::channel(String::from("Waiting for Feedback!"));
-        MediaCatalog {
+        Self {
             config,
-            movies: vec![],
-            shows: vec![],
-            episodes: vec![],
-            tree: TreeNode::Category { name: format!("Uninitialized Tree"), children: vec![] },
             what_i_am_doing: tx,
-            // manifest: Some(ApiManifest::new())
         }
     }
-
-    pub fn generate_catalog_tree(mut self) -> Result<MediaCatalog, TreeGenError> {
+    pub fn build(self) -> Result<Catalog, CatalogBuildError> {
         let cfg_base = &self.config.SrcBaseDir;
         let movies_dir = cfg_base.join(&self.config.SrcMovieSubDir);
         let shows_dir  = cfg_base.join(&self.config.SrcShowSubDir);
 
-        tracing::info!("Start of Generation");
+        tracing::info!("Building Catalog!");
         if ! Path::new(&movies_dir).exists()
-            { return Err(TreeGenError::MoviesDirDoesntExist); }
+            { return Err(CatalogBuildError::MoviesDirDoesntExist); }
         if ! Path::new(&shows_dir).exists()
-            { return Err(TreeGenError::ShowsDirDoesntExist); }
+            { return Err(CatalogBuildError::ShowsDirDoesntExist); }
 
         // I HAVE NEVER GOTTEN TO USE CURRYING BEFORE!!! LET'S GO
         let currying_match = |re: Regex, invert: bool| 
@@ -65,15 +72,10 @@ impl MediaCatalog {
         let SE_number_re = Regex::new(r"[0-9]+")?; // multipurpose regex for season and episode number
         let is_match = move |x: &String, re: &Regex| re.is_match(x);
 
-
-        let mut root = TreeNode::Category{ name: String::from("."), children: vec![] };
-        let mut movies_cat: TreeNode = TreeNode::Category { name: String::from("Movies"), children: Vec::new()};
-        let mut shows_cat:  TreeNode = TreeNode::Category { name: String::from("Shows"),  children: Vec::new()};
-        let mut fails_cat:  TreeNode = TreeNode::Category { name: String::from("Failures"),  children: Vec::new()};
-
         let mut movies = vec![];
         let mut shows = vec![];
         let mut episodes = vec![];
+        let mut fails = vec![];
 
         tracing::info!("Beginning Movies Dir Walk");
         let mut builder = WalkBuilder::new(movies_dir.clone());
@@ -95,9 +97,8 @@ impl MediaCatalog {
             // TODO: FITFO
             self.what_i_am_doing.send(format!("[Movie]   Found: {}", dir_entry.file_name().to_string_lossy().to_string()));
             if let Err(err) = create_result {
-                let fails = fails_cat.children_mut().unwrap();
                 let buf = dir_entry.path().to_path_buf();
-                fails.push(TreeNode::Fail{err, buf});
+                fails.push(CatalogFailure{err, buf});
                 continue;
             }
             let movie = Arc::new(create_result.unwrap());
@@ -122,9 +123,8 @@ impl MediaCatalog {
             let create_result = Show::new(dir_entry.path().to_path_buf());
             self.what_i_am_doing.send(format!("[Show]    Found: {}", dir_entry.file_name().to_string_lossy().to_string()));
             if let Err(err) = create_result {
-                let fails = fails_cat.children_mut().unwrap();
                 let buf = dir_entry.path().to_path_buf();
-                fails.push(TreeNode::Fail{err, buf});
+                fails.push(CatalogFailure{err, buf});
                 continue;
             }
             let show = Arc::new(create_result.unwrap());
@@ -135,7 +135,6 @@ impl MediaCatalog {
 
         tracing::info!("Beginning Episodes Walk");
         for show in shows.iter_mut() {
-            // let mut guard = block_on(show.lock());
             self.what_i_am_doing.send(format!("[Show]    Looking for Episodes: {}", show.src.strip_prefix(shows_dir.clone()).unwrap().to_string_lossy().to_string()));
             let mut builder = WalkBuilder::new(&show.src);
             builder.min_depth(Some(1))
@@ -154,9 +153,8 @@ impl MediaCatalog {
                 let create_result = Episode::new(dir_entry.path().to_path_buf(), Arc::downgrade(&*show));
                 self.what_i_am_doing.send(format!("[Episode] Found: {}", dir_entry.path().strip_prefix(shows_dir.clone()).unwrap().to_string_lossy().to_string()));
                 if let Err(err) = create_result {
-                    let fails = fails_cat.children_mut().unwrap();
                     let buf = dir_entry.path().to_path_buf();
-                    fails.push(TreeNode::Fail{err, buf});
+                    fails.push(CatalogFailure{err, buf});
                     continue;
                 }
                 let episode = create_result.unwrap();
@@ -172,31 +170,15 @@ impl MediaCatalog {
             }
         }
 
-        for movie_box in movies.iter() {
-            movies_cat.push_child(movie_box.clone().into());
-        }
-
-        for show in shows.iter() {
-            shows_cat.push_child(show.clone().into());
-        }
-
-        let children = root.children_mut().unwrap();
-        children.push(movies_cat);
-        children.push(shows_cat);
-        children.push(fails_cat);
-
-        Ok(MediaCatalog {
+        Ok(Catalog {
             config: self.config,
             movies,
             shows,
             episodes,
-            tree: root,
-            what_i_am_doing: self.what_i_am_doing,
-            // manifest: self.manifest
+            failures: fails,
         })
     }
     pub fn subscribe(&self) -> watch::Receiver<String> {
         self.what_i_am_doing.subscribe()
     }
 }
-

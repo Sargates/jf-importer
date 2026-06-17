@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::media::types::{Movie, Show};
+use crate::media::{Movie, Show};
 use super::error::QueryError;
 
 /// The status of an outgoing query to an API

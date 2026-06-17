@@ -13,7 +13,7 @@ use ratatui::style::palette::tailwind::{BLUE, GREEN, SLATE};
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use jf_import_library::media::types::MediaItem;
+use jf_import_library::media::MediaItem;
 use jf_import_library::api::client::{QueryResponse, QueryStatus};
 
 use crate::widgets::BRAILLE;
@@ -60,7 +60,6 @@ impl Widget for &MediaList {
                     QueryStatus::Success(response) => { response.title.clone() },
                     _ => { item.inner.raw_media_label() }
                 };
-
                 Line::from(name).left_aligned().into()
             })
             .collect()

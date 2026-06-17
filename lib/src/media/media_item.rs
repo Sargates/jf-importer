@@ -10,7 +10,7 @@ use regex::Regex;
 
 use crate::api::client::{QueryStatus, QueryResponse};
 
-use crate::media::tree::TreeNode;
+// use crate::media::tree::TreeNode;
 
 
 #[derive(Debug, Clone)]
@@ -22,13 +22,13 @@ pub enum MediaCreateError {
     EpisodeFailedToParseSeason,
 }
 
-
 #[derive(Debug, Clone)]
 pub enum MediaItem {
     Movie(Arc<Movie>),
     Show(Arc<Show>),
     Episode(Arc<Episode>),
 }
+
 impl Hash for MediaItem {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self {
