@@ -19,9 +19,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use jf_import_library::api::{
-    self,
-    client::*,
-    calls::*,
+    self, calls::*, client::*
 };
 // use jf_import_library::api::{self, ApiCall, ApiCallFuture, ApiManifest, QueryStatus, TMDBClient, error::QueryError};
 use jf_import_library::media::{
@@ -44,31 +42,31 @@ pub enum TreeViewError {
 }
 pub struct CatalogView {
     catalog: Catalog,
-
-    view_state: RefCell<ListState>,
     
     api_manifest: ApiManifest,
     api_client: Arc<dyn api::client::ApiClient + Send + Sync>,
+
+    media_list: MediaList,
 }
 impl CatalogView {
     pub fn new(catalog: Catalog) -> Result<Self, TreeViewError> {
-        let mut state = ListState::default();
-        if catalog.iter_all().count() > 0 { state = state.with_selected(Some(0)); } // autoselect first element
         tracing::info!("Total media items while creating view: {}", catalog.iter_all().count());
-        tracing::info!("New State: {:?}", state.selected());
 
         let mut view = CatalogView {
             catalog,
-            view_state: RefCell::new(state),
-
             api_client: Arc::new(TMDBClient::new()),
-            api_manifest: ApiManifest::new()
+            api_manifest: ApiManifest::new(),
+
+            media_list: MediaList::default(),
         };
 
         view.stage_api_calls();
+        view.update_media_list();
+
         Ok(view)
     }
     pub async fn update(&mut self) -> Result<(), TreeViewUpdateError> {
+        let media_list_update: Option<Vec<MediaListItem>> = None;
         select! {
             Some(result) = self.api_manifest.next(), if !self.api_manifest.is_empty() => {
                 match &result.status {
@@ -84,9 +82,15 @@ impl CatalogView {
                 }
                 let mut lock = self.api_manifest.lock().await;
                 lock.insert(result.item, Rc::new(result.status));
+                drop(lock);
+                
+
+                // Update the media list
+                self.update_media_list();
             }
             _ = futures::future::ready(()) => {} // non-blocking await
         }
+
         match BRAILLE.try_lock() {
             Ok(mut lock) => lock.tick_next(),
             Err(err) => tracing::error!("Failed to acquire lock for ticking: Err: {}", err),
@@ -120,21 +124,28 @@ impl CatalogView {
             lock.insert(show, status.clone());
         }
     }
-    fn select_next(&self) {
-        let mut lock = self.view_state.borrow_mut();
-        match lock.selected() {
-            Some(index) if index < self.catalog.iter_all().count()-1 => { lock.select_next(); }
-            None => { lock.select(Some(0)); }
-            Some(_) => {}
-        }
+
+    fn update_media_list(&mut self) {
+        self.media_list.update(self.catalog.iter_all()
+            .map(|media| {
+                let lock = self.api_manifest.try_lock().unwrap();
+                let status = match lock.get(&media) {
+                    Some(rc) => rc.clone(),
+                    None => Rc::new(QueryStatus::NotStarted),
+                };
+                drop(lock);
+                MediaListItem {
+                    inner: media.clone(),
+                    status,
+                }
+            })
+            .collect());
     }
-    fn select_previous(&self) {
-        let mut lock = self.view_state.borrow_mut();
-        match lock.selected() {
-            Some(index) if index >= 1 => { lock.select_previous(); }
-            None => { lock.select(Some(0)); }
-            Some(_) => {}
-        }
+    fn select_next(&mut self) {
+        self.media_list.select_next();
+    }
+    fn select_previous(&mut self) {
+        self.media_list.select_previous();
     }
 }
 
@@ -161,62 +172,54 @@ impl Renderable for &mut CatalogView {
         ]);
 
         // We don't draw the border here
-        let frame_border = Block::new()
+        let instructions = Block::new()
             .bold()
             .fg(Color::Rgb(153, 121, 61))
             .border_type(BorderType::Rounded)
-            .title_bottom(instructions.clone().centered());
+            .title_bottom(instructions.centered());
+        frame.render_widget(&instructions, frame.area());
 
-        frame.render_widget(&frame_border, frame.area());
-
-        let outer_layout = Layout::horizontal([
+        let [left, list_view, split] = Layout::horizontal([
             Constraint::Length(32),
             Constraint::Fill(1),
             Constraint::Ratio(1, 3)])
             .spacing(Spacing::Overlap(1))
             // .margin(1)
-            .split(frame.area());
+            .areas(frame.area());
+        let [media_info, user_info] = Layout::vertical([
+            Constraint::Fill(3),
+            Constraint::Fill(2)])
+            .spacing(Spacing::Overlap(1))
+            .areas(split);
+        // [left, list_view, media_info, user_info]
 
-        let block = Block::new()
+        let styled_block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .merge_borders(symbols::merge::MergeStrategy::Fuzzy);
 
-        let lock = self.view_state.borrow();
-        let items = MediaList::from_iter(self.catalog.iter_all()
-            .map(|media| {
-                // this shouldn't fail, we don't do multithreading and we 
-                // don't hold the lock across `await`s
-                let lock = self.api_manifest.try_lock().unwrap();
-                let status = match lock.get(&media) {
-                    Some(rc) => rc.clone(),
-                    None => Rc::new(QueryStatus::NotStarted),
-                };
-                drop(lock);
-
-                MediaListItem {
-                    inner: media.clone(),
-                    status,
-                }
-            }))
-            .set_state(lock.clone())
-        ;
-        items.render(outer_layout[1], frame.buffer_mut());
-
-        let mut lock = match BRAILLE.try_lock() {
-            Ok(lock) => lock,
-            Err(err) => return,
-        };
+        self.media_list.render(list_view, frame.buffer_mut());
 
         // Filler until I decide how to populate this empty space
-        Paragraph::new("").block(block.clone())
-            .render(outer_layout[0], frame.buffer_mut());
-        Paragraph::new::<String>((&*lock).into()).block(block.clone())
-            .render(outer_layout[2], frame.buffer_mut());
-        drop(lock);
+        Paragraph::new("").block(styled_block.clone())
+            .render(left, frame.buffer_mut());
+        Paragraph::new("").block(styled_block.clone())
+            .render(media_info, frame.buffer_mut());
+        Paragraph::new("").block(styled_block.clone())
+            .render(user_info, frame.buffer_mut());
+
+        // {
+        //     let mut lock = match BRAILLE.try_lock() {
+        //         Ok(lock) => lock,
+        //         Err(err) => return,
+        //     };
+        //     Paragraph::new::<String>((&*lock).into()).block(styled_block.clone())
+        //         .render(media_info, frame.buffer_mut());
+        //     drop(lock);
+        // }
+
     }
     fn handle_input(self, code: crossterm::event::KeyCode) {
-        // let mut lock = self.view_state.borrow_mut();
         match code {
             crossterm::event::KeyCode::Char('j') => {
                 self.select_next();
@@ -232,6 +235,8 @@ impl Renderable for &mut CatalogView {
                 for k in self.catalog.iter_all() {
                     lock.insert(k.clone(), Rc::new(QueryStatus::InProgress));
                 }
+                drop(lock);
+                self.update_media_list();
             }
             _ => {}
         }

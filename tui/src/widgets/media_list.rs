@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, vec};
 use std::rc::Rc;
 
 use ratatui::{
@@ -31,24 +31,39 @@ pub struct MediaList {
 }
 impl MediaList {
     pub fn update(&mut self, new: Vec<MediaListItem>) {
-        self.state = RefCell::new(ListState::default());
+        let mut state = ListState::default();
+        if new.len() > 0 { state = state.with_selected(Some(0)); } // autoselect first element
+        let mut borrow = self.state.borrow_mut();
+        let opt = borrow.selected();
+        if let Some(i) = opt && i < new.len() {
+            borrow.select(Some(i)); 
+        } else if let None = opt && new.len() > 0 {
+            borrow.select(Some(0)); 
+        }
         self.inner = new;
     }
     pub fn set_state(mut self, state: ListState) -> Self {
         *self.state.borrow_mut() = state;
         self
     }
-}
-
-impl FromIterator<MediaListItem> for MediaList {
-    /// You may want to call `Default::default` instead
-    fn from_iter<T: IntoIterator<Item = MediaListItem>>(iter: T) -> Self {
-        Self {
-            inner: iter.into_iter().collect(),
-            state: RefCell::new(ListState::default()),
+    pub fn select_next(&mut self) {
+        let mut lock = self.state.borrow_mut();
+        match lock.selected() {
+            Some(index) if index < self.inner.len()-1 => { lock.select_next(); }
+            None => { lock.select(Some(0)); }
+            Some(_) => {}
+        }
+    }
+    pub fn select_previous(&mut self) {
+        let mut lock = self.state.borrow_mut();
+        match lock.selected() {
+            Some(index) if index >= 1 => { lock.select_previous(); }
+            None => { lock.select(Some(0)); }
+            Some(_) => {}
         }
     }
 }
+
 impl Widget for &MediaList {
     fn render(self, area: Rect, buf: &mut Buffer)
     where

@@ -111,14 +111,14 @@ impl App {
         //* stateful widget doesn't want to work with interior mutability, so we're back to this
         // TODO: fix using interior mutability with stateful widget. build minimal working example
         match &self.state {
-            AppState::Postinit              => { self.default_background(frame) },
-            AppState::GeneratingCatalog(view)  => { self.default_background(frame) },
-            AppState::CatalogView(view)     => {},
+            AppState::Postinit                => { self.default_background(frame) },
+            AppState::GeneratingCatalog(view) => { self.default_background(frame) },
+            AppState::CatalogView(view)       => {},
         }
         match &mut self.state {
-            AppState::Postinit              => {},
-            AppState::GeneratingCatalog(view)  => { view.render(frame) },
-            AppState::CatalogView(view)     => { view.render(frame) },
+            AppState::Postinit                => {},
+            AppState::GeneratingCatalog(view) => { view.render(frame) },
+            AppState::CatalogView(view)       => { view.render(frame) },
         }
 
         match self.error {

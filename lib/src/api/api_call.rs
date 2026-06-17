@@ -39,6 +39,8 @@ impl ApiCallFuture {
                 MediaItem::Show(show) => client.search_show(show).await,
                 MediaItem::Episode(episode) => todo!(),
             };
+            // TODO: remove this sleep!
+            tokio::time::sleep(Duration::from_secs(4)).await;
             ApiCall {
                 item,
                 status
