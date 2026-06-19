@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 use ratatui::{
     buffer::Buffer, 
     layout::*, 
@@ -11,8 +13,6 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::select;
 
-use std::cell::RefCell;
-
 use jf_import_library::api::{client::QueryStatus, error::QueryError};
 use jf_import_library::media::{
     Catalog, CatalogBuilder, CatalogBuildError,
@@ -20,61 +20,99 @@ use jf_import_library::media::{
 use jf_import_library::media;
 use jf_import_library::config::*;
 
-use super::{BrailleLoadingIcon, Renderable};
+use crate::widgets::{BrailleLoadingIcon, Renderable};
 
 #[derive(Debug)]
-pub enum GeneratingViewError {
-    GeneratingThreadPanic(tokio::task::JoinError),
+pub enum GeneratingWidgetError {
+    PanicOnBuilderThread(tokio::task::JoinError),
     CatalogGenError(CatalogBuildError),
     Timeout,
     RecvError(watch::error::RecvError)
 }
 
-pub struct GeneratingView {
+pub struct GeneratingWidget {
     thread_handle: JoinHandle<Result<Catalog, CatalogBuildError>>,
-    subscriber: watch::Receiver<String>,
     completed: Option<Catalog>,
 
-    last: (String, String),
-    buffer: RefCell<ModalBuffer>
+    buffer: RefCell<MessageDisplay>
 }
-impl GeneratingView {
+impl GeneratingWidget {
     pub fn new() -> Self {
         let builder = CatalogBuilder::new(CONFIG.clone());
+        let mut buffer = MessageDisplay::new(builder.subscribe());
+
         // this subscriber needs to be properly handled after we call `builder.build`
-        let subscriber = builder.subscribe();
         let thread_handle = tokio::task::spawn_blocking(move || {
             tracing::info!("Creating GeneratingView");
             let res = builder.build();
-            tracing::info!("Finished GeneratingView");
+            match &res {
+                Ok(_)  => tracing::info!("[GenerationThread] Successfully generated catalog"),
+                Err(e) => tracing::info!("[GenerationThread] Failed to generate catalog: {e:?}"),
+            }
             res
         });
+
         Self {
             thread_handle,
-            subscriber,
-            last: (format!("Unset Previous"), format!("Unset")),
             completed: None,
-            buffer: Default::default()
+            buffer: RefCell::new(buffer)
         }
     }
-    pub async fn poll(&mut self) -> Result<(), GeneratingViewError> {
+    pub async fn poll(&mut self) -> Result<(), GeneratingWidgetError> {
+        let mut borrow_mut = self.buffer.borrow_mut();
         select! {
             res = &mut self.thread_handle => {
                 match res {
                     Ok(owned) => {
                         tracing::info!("Finished!!!");
-                        self.completed = Some(owned.map_err(|e| GeneratingViewError::CatalogGenError(e))?);
+                        self.completed = Some(owned.map_err(|e| GeneratingWidgetError::CatalogGenError(e))?);
                     }
                     Err(e) => {
                         tracing::error!("Failed to join thread while generating media catalog! Error: {:?}", e);
-                        Err(e).map_err(|e| GeneratingViewError::GeneratingThreadPanic(e))?;
+                        Err(e).map_err(|e| GeneratingWidgetError::PanicOnBuilderThread(e))?
                     }
+                }
+            }
+            res = borrow_mut.poll() => {
+                match res {
+                    Ok(_) => {}
+                    Err(err) => { Err(err)? }
                 }
             }
             _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
                 tracing::info!("Timed out waiting for GeneratingView subscriber!!");
-                Err(GeneratingViewError::Timeout)?
+                Err(GeneratingWidgetError::Timeout)?
             }
+        }
+        Ok(())
+    }
+    pub fn is_complete(&self) -> bool { self.thread_handle.is_finished() && self.completed.is_some() }
+    pub fn take(&mut self) -> Option<Catalog> { self.completed.take() }
+}
+
+struct MessageDisplay {
+    pub inner: Option<Buffer>,
+    pub last: (String, String),
+    pub subscriber: watch::Receiver<String>,
+}
+impl MessageDisplay {
+    pub fn new(subscriber: watch::Receiver<String>) -> Self {
+        Self {
+            inner: None,
+            last: ("Unset Previous".into(), "Unset".into()),
+            subscriber,
+        }
+    }
+    pub fn generate(&mut self, rect: Rect)
+        { self.inner = Some(Buffer::empty(rect)) }
+    pub fn is_unset(&self) -> bool
+        { self.inner.is_none() }
+    pub fn set(&mut self, inner: Buffer)
+        { self.inner = Some(inner) }
+    pub fn take(&mut self) -> Option<Buffer>
+        { self.inner.take() }
+    pub async fn poll(&mut self) -> Result<(), GeneratingWidgetError> {
+        select! {
             res = self.subscriber.changed() => {
                 match res {
                     Ok(()) => {
@@ -84,63 +122,37 @@ impl GeneratingView {
                     }
                     Err(e) => {
                         tracing::info!("[] Error when receiving from channel: {:?}", e);
-                        Err(e).map_err(|e| GeneratingViewError::RecvError(e))?;
+                        Err(e).map_err(|e| GeneratingWidgetError::RecvError(e))?;
                     }
                 }
+            }
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
+                tracing::info!("Timed out waiting for GeneratingView subscriber!!");
+                Err(GeneratingWidgetError::Timeout)?
             }
         }
         Ok(())
     }
-    pub fn is_complete(&self) -> bool { self.completed.is_some() }
-    pub fn take(&mut self) -> Option<Catalog> { self.completed.take() }
 }
 
-// making this a doccomment so code has syntax highlighting
-/// TODO: This should be its own widget
-/// It should contain more than just a single Option<Buffer> because that makes this whole struct is redundant. It should be its own Widget and it should support getting a Buffer that represents the contents within the Border
-/// ```rust
-/// // self.buffer should become `Option<ModalBuffer>`
-/// struct ModalBuffer {
-///     inner_buf: Buffer,
-///     bordered: Block, // block with a border
-///     inner: Box<impl Widget> // or whatever the syntax is
-/// }
-/// impl ModalBuffer {
-///         Self { inner: Buffer::new(area) }
-///     }
-/// }
-/// ```
-#[derive(Default)]
-struct ModalBuffer {
-    inner: Option<Buffer>
-}
-impl ModalBuffer {
-    pub fn new() -> Self 
-        { Self{ inner: None } }
-    pub fn generate(&mut self, rect: Rect) 
-        { self.inner = Some(Buffer::empty(rect)) }
-    pub fn is_unset(&self) -> bool 
-        { self.inner.is_none() }
-    pub fn set(&mut self, inner: Buffer) 
-        { self.inner = Some(inner) }
-    pub fn take(&mut self) -> Option<Buffer> 
-        { self.inner.take() }
-}
-impl Renderable for &mut GeneratingView {
-    fn render(self, frame: &mut ratatui::Frame)
+impl WidgetRef for GeneratingWidget {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer)
     where
         Self: Sized {
         let mut borrow_mut = self.buffer.borrow_mut();
-        let mut buffer = match borrow_mut.take() {
+        borrow_mut.render(area, buf);
+    }
+}
+
+impl Widget for &mut MessageDisplay {
+    fn render(self, area: Rect, buf: &mut Buffer)
+    where
+        Self: Sized {
+
+        // let mut borrow_mut = self.inner.borrow_mut();
+        let mut buffer = match self.inner.take() {
             Some(buffer) => buffer,
-            None => {
-                let [_, rect] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
-                    .areas(frame.area());
-                let [_, rect] = Layout::vertical([Constraint::Percentage(70), Constraint::Percentage(30)])
-                    .areas(rect);
-                borrow_mut.generate(rect);
-                borrow_mut.take().unwrap()
-            }
+            None => { Buffer::empty(area) }
         };
 
         // paths are unique, so messages from the MediaCatalogBuilder are too. this is 
@@ -148,9 +160,10 @@ impl Renderable for &mut GeneratingView {
         if self.last.0 == self.last.1 { return; }
         
         let popup_block = Block::bordered()
-            .border_type(BorderType::Rounded)
+            // .border_type(BorderType::Rounded)
             .title(" Generating Media Catalog ")
             .merge_borders(symbols::merge::MergeStrategy::Fuzzy)
+            .fg(Color::Rgb(153, 121, 61))
         ;
         let mut new_inner = {
             // we take the lines `1..N`, dropping the 0th line, and pad the end of the buffer so it's the right size.
@@ -158,6 +171,7 @@ impl Renderable for &mut GeneratingView {
             // of them together and exposes no other methods of boolean-ing them together, so there's no way 
             // to be clever about doing this
             let no_border = popup_block.inner(buffer.area);
+            // let no_border = buffer.area;
             let mut dummy = buffer.clone();
             dummy.resize(no_border);
             let mut iter = dummy.content.into_iter();
@@ -173,28 +187,28 @@ impl Renderable for &mut GeneratingView {
         };
         // assert_eq!(popup_block.inner(buffer.area), new_inner.area);
 
-        Widget::render(Clear, buffer.area, frame.buffer_mut());
+        Widget::render(Clear, buffer.area, buf);
         let dummy = Paragraph::new("")
             .bold()
-            .fg(Color::Green)
+            // .fg(Color::Green)
             .block(popup_block.clone());
-        Widget::render(dummy, buffer.area, frame.buffer_mut());
+        Widget::render(dummy, buffer.area, buf);
 
         let paragraph = Paragraph::new(format!("{}", self.last.1))
             .bold()
-            .fg(Color::Green);
+            // .fg(Color::Green)
+        ;
         let size = new_inner.area.clone().as_size();
         let pos = new_inner.area.clone().as_position();
         let write_area = Rect::new(pos.x, pos.y+size.height-1, size.width, 1); // last line of buffer
-        Widget::render(paragraph, write_area, &mut new_inner);            // render paragraph to last line of buffer
+        Widget::render(&paragraph, write_area, &mut new_inner);            // render paragraph to last line of buffer
         // tracing::info!("new_inner:\n{:?}", new_inner);
-        frame.buffer_mut().merge(&new_inner);
+        buf.merge(&new_inner);
+        Widget::render(&paragraph, write_area, buf);
 
         // need to re-create a buffer of the original size so that we 
         // don't recursively make the buffer smaller and smaller
         new_inner.resize(buffer.area().clone());
-        borrow_mut.set(new_inner)
+        self.inner = Some(new_inner);
     }
-
-    fn handle_input(self, key: crossterm::event::KeyCode) {}
 }

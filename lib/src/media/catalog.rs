@@ -14,7 +14,7 @@ pub struct Catalog {
     pub(crate) shows: Vec<Arc<Show>>,
     pub(crate) episodes: Vec<Arc<Episode>>,
     pub(crate) failures: Vec<CatalogFailure>,
-    // pub api_manifest: ApiManifest,
+    // pub(crate) api_manifest: Option<ApiManifest>,
 }
 
 impl Catalog {
@@ -25,11 +25,7 @@ impl Catalog {
     pub fn iter_shows(&self) -> impl Iterator<Item = Arc<Show>> {
         self.shows.iter().map(|s| s.clone())
     }
-    // /// Number of `Movie` and `Show` objects that were successfully added to the catalog
-    // pub fn len(&self) -> usize {
-    //     self.movies.len() + self.shows.len()
-    // }
-    /// Return an interator of all `Movie` and `Show` objects
+    /// Return an iterator of all `Movie` and `Show` objects
     pub fn iter_all(&self) -> impl Iterator<Item = MediaItem> {
         let movies = self.movies.iter()
             .map(|m| MediaItem::Movie(m.clone()));

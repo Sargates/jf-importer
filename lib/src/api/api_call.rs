@@ -64,6 +64,7 @@ pub struct ApiCall {
     pub status: QueryStatus,
 }
 
+#[derive(Default)]
 pub struct ApiManifest {
     // api_count: u32, // TODO: support tracking how many API calls are made for a single Future<T>
     outgoing: FuturesUnordered<ApiCallFuture>,

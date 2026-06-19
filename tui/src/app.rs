@@ -1,11 +1,13 @@
 use std::{io, time::Duration};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use crossterm::{
     event::{self, KeyEventKind, KeyCode, Event, KeyEvent},
 };
 
 use futures::FutureExt;
+use jf_import_library::api::client::TMDBClient;
 use ratatui::{
     *,
     layout::*,
@@ -22,7 +24,7 @@ use jf_import_library::{
 use tokio::{self, select, sync::watch};
 use futures::executor::block_on;
 
-use crate::widgets::{self, Renderable, CatalogView, GeneratingView, error::*};
+use crate::widgets::{self, Renderable, CatalogView, GeneratingWidget, error::*};
 use crate::logging::*;
 
 #[derive(Default, Debug)]
@@ -36,28 +38,38 @@ enum ErrorCatch {
 #[derive(Debug)]
 enum AppUpdateError {
     ChannelRecvError,
-    GeneratingViewError(GeneratingViewError),
-    TreeViewError(TreeViewError),
+    GeneratingViewError(GeneratingWidgetError),
+    CatalogViewError(TreeViewError),
 }
 
-#[derive(Default)]
 enum AppState {
-    #[default]
-    Postinit,
-    GeneratingCatalog(GeneratingView),
+    // #[default]
+    // Postinit,
+    // GeneratingCatalog(GeneratingView),
     CatalogView(CatalogView)
+}
+// can't derive for non-unit variants
+impl Default for AppState {
+    fn default() -> Self {
+        Self::CatalogView(
+            CatalogView::default()
+                .with_client(Arc::new(TMDBClient::new()))
+        )
+    }
 }
 
 #[derive(Default)]
 pub struct App {
     tree: Option<Rc<Catalog>>,
     state: AppState,
+    generating_view: Option<GeneratingWidget>,
     error: ErrorCatch,
     exit: bool,
 }
 impl App {
     pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         tracing::info!("Starting!!");
+        
         while !self.exit {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
@@ -83,25 +95,28 @@ impl App {
     }
     async fn update(&mut self) -> Result<(), AppUpdateError> {
         match &mut self.state {
-            AppState::GeneratingCatalog(view) => {
-                if view.is_complete() {
-                    tracing::info!("View is completed!");
-                    let ptr = view.take().unwrap();
-                    let catalog_view = CatalogView::new(ptr).map_err(|e| AppUpdateError::TreeViewError(e))?;
-                    // self.tree = Some(ptr);
-                    self.state = AppState::CatalogView(catalog_view);
-                    return Ok(())
-                }
-                match view.poll().await {
-                    Ok(_) => {},
-                    Err(err) => { Err(AppUpdateError::GeneratingViewError(err))?; }
-                }
-            }
+            // AppState::GeneratingCatalog(view) => {
+            //     if view.is_complete() {
+            //         tracing::info!("View is completed!");
+            //         let ptr = view.take().unwrap();
+            //         let catalog_view = CatalogView::new(Some(ptr)).map_err(|e| AppUpdateError::CatalogViewError(e))?;
+            //         self.state = AppState::CatalogView(catalog_view);
+            //         return Ok(())
+            //     }
+            //     // TODO: The flag for `view.is_complete()` never gets set if the catalog building fails.
+            //     // Needs to be rewriten to having `CatalogView` as the ONLY view state, unless we're
+            //     // in some JSON editor.
+            //     match view.poll().await {
+            //         Ok(_) => {},
+            //         Err(err) => { Err(AppUpdateError::GeneratingViewError(err))?; }
+            //     }
+            // }
             AppState::CatalogView(view) => {
                 match view.update().await {
                     Ok(_) => {}
                     Err(e) => {}
                 }
+                // view.post_update();
             }
             _ => {}
         }
@@ -110,14 +125,18 @@ impl App {
     fn draw(&mut self, frame: &mut Frame) {
         //* stateful widget doesn't want to work with interior mutability, so we're back to this
         // TODO: fix using interior mutability with stateful widget. build minimal working example
-        match &self.state {
-            AppState::Postinit                => { self.default_background(frame) },
-            AppState::GeneratingCatalog(view) => { self.default_background(frame) },
-            AppState::CatalogView(view)       => {},
-        }
+        // match &self.state {
+        //     AppState::Postinit                => { self.default_background(frame) },
+        //     AppState::GeneratingCatalog(view) => { self.default_background(frame) },
+        //     AppState::CatalogView(view)       => {},
+        // }
+        // match &mut self.state {
+        //     AppState::Postinit                => {},
+        //     AppState::GeneratingCatalog(view) => { view.render(frame) },
+        //     AppState::CatalogView(view)       => { view.render(frame) },
+        // }
+
         match &mut self.state {
-            AppState::Postinit                => {},
-            AppState::GeneratingCatalog(view) => { view.render(frame) },
             AppState::CatalogView(view)       => { view.render(frame) },
         }
 
@@ -208,16 +227,16 @@ impl App {
             }
             _ => {
                 match &mut self.state {
-                    AppState::Postinit => {
-                        match key_event.code {
-                            KeyCode::Char('p') => {
-                                let res = GeneratingView::new();
-                                self.state = AppState::GeneratingCatalog(res)
-                            }
-                            _ => {}
-                        }
-                    }
-                    AppState::GeneratingCatalog(view) => {}, // no user input
+                    // AppState::Postinit => {
+                    //     match key_event.code {
+                    //         KeyCode::Char('p') => {
+                    //             let res = GeneratingView::new();
+                    //             self.state = AppState::GeneratingCatalog(res)
+                    //         }
+                    //         _ => {}
+                    //     }
+                    // }
+                    // AppState::GeneratingCatalog(view) => {}, // no user input
                     AppState::CatalogView(view) => view.handle_input(key_event.code)
                 }
             }
