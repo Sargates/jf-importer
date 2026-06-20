@@ -54,7 +54,7 @@ pub enum InfoWidgetError {
 
 #[derive(Default)]
 pub struct CatalogView {
-    catalog: Option<Catalog>,
+    catalog: Option<Result<Catalog, GeneratingWidgetError>>,
     
     api_client: Option<Arc<dyn api::client::ApiClient + Send + Sync>>,
     api_manifest: ApiManifest,
@@ -72,7 +72,7 @@ impl CatalogView {
         self
     }
     pub fn with_catalog(mut self, catalog: Catalog) -> Self {
-        self.catalog = Some(catalog);
+        self.catalog = Some(Ok(catalog));
         self.update_media_list();
         self
     }
@@ -112,7 +112,7 @@ impl CatalogView {
         Ok(())
     }
     fn stage_api_calls(&mut self) {
-        if let Some(catalog) = &self.catalog && let Some(client) = &self.api_client {
+        if let Some(Ok(catalog)) = &self.catalog && let Some(client) = &self.api_client {
             for media in catalog.iter_all() {
                 let future = ApiCallFuture::new(media.clone(), client.clone());
                 self.api_manifest.push_future(future);
@@ -123,10 +123,12 @@ impl CatalogView {
                 lock.insert(media.clone(), status.clone());
             }
         }
-        else { tracing::warn!("Tried to stage api calls while `self.catalog = Option::None`") }
+        else if let Some(Err(e)) = &self.catalog {
+            tracing::warn!("Tried to stage api calls while `self.catalog` failed to generate. Error: {e:?}") }
+        else { tracing::warn!("Tried to stage api calls while `self.catalog: None`") }
     }
     fn update_media_list(&mut self) {
-        if let Some(catalog) = &self.catalog {
+        if let Some(Ok(catalog)) = &self.catalog {
             self.media_list.update(catalog.iter_all()
                 .map(|media| {
                     let lock = self.api_manifest.try_lock().unwrap();
@@ -142,17 +144,21 @@ impl CatalogView {
                 })
                 .collect());
         }
-        else { tracing::warn!("Tried to update media list while `self.catalog = Option::None`") }
+        else if let Some(Err(e)) = &self.catalog {
+            tracing::warn!("Tried to update media list while `self.catalog` failed to generate. Error: {e:?}") }
+        else { tracing::warn!("Tried to update media list while `self.catalog: None`") }
     }
     fn select_next(&mut self)     { self.media_list.select_next(); }
     fn select_previous(&mut self) { self.media_list.select_previous(); }
 
     pub fn get_client(&self) -> Option<Arc<dyn api::client::ApiClient+Sync+Send>> { self.api_client.clone() }
     pub fn set_client(&mut self, client: Option<Arc<dyn api::client::ApiClient+Sync+Send>>) { self.api_client = client; self.stage_api_calls(); }
-    pub fn get_catalog(&self) -> Option<&Catalog>   { self.catalog.as_ref() }
-    pub fn set_catalog(&mut self, catalog: Option<Catalog>) {
-        if let Some(catalog) = &catalog {
+    pub fn get_catalog(&self) -> Option<&Result<Catalog,GeneratingWidgetError>>   { self.catalog.as_ref() }
+    pub fn set_catalog(&mut self, catalog: Option<Result<Catalog,GeneratingWidgetError>>) {
+        if let Some(Ok(catalog)) = &catalog {
                tracing::info!("Total media items while creating view: {}", catalog.iter_all().count()); } 
+        else if let Some(Err(e)) = &catalog {
+               tracing::info!("[CatalogView::set_catalog] Tried setting catalog to Some(Err(_)). Error: {e:?}"); }
         else { tracing::info!("Creating `CatalogView` with no catalog"); }
         self.catalog = catalog;
         self.update_media_list();
@@ -180,15 +186,6 @@ impl CatalogView {
         // Update the media list
         self.update_media_list();
     }
-    // async fn poll_info_widget(&mut self) -> Result<(), InfoWidgetError> {
-    //     match &mut self.info_widget {
-    //         ActiveInfoWidget::None => { Ok(()) },
-    //         ActiveInfoWidget::GeneratingCatalog(generating_widget) => {
-    //             generating_widget.poll().await
-    //                 .map_err(|e| InfoWidgetError::GeneratingCatalog(e))
-    //         },
-    //     }
-    // }
 }
 
 // TODO: do this properly
@@ -240,7 +237,8 @@ impl Renderable for &mut CatalogView {
         let styled_block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .merge_borders(symbols::merge::MergeStrategy::Fuzzy);
+            .merge_borders(symbols::merge::MergeStrategy::Fuzzy)
+        ;
 
         self.media_list.render(list_view, frame.buffer_mut());
 
@@ -251,24 +249,20 @@ impl Renderable for &mut CatalogView {
             .render(media_info, frame.buffer_mut());
         // Paragraph::new("").block(styled_block.clone())
         //     .render(user_info, frame.buffer_mut());
+        //     
 
         // let info_rect = styled_block.inner(user_info);
-        let info_rect = user_info;
-        match &self.info_widget {
-            Some(generator) => { generator.render_ref(info_rect, frame.buffer_mut()); }
-            None => { Clear.render(info_rect, frame.buffer_mut()); }
+        let info_block = styled_block.clone()
+            .title_top(Line::from(" Information ".add_modifier(Modifier::REVERSED).bold()).right_aligned())
+        ;
+        Paragraph::new("").block(info_block.clone()).render(user_info, frame.buffer_mut());
+        match self.info_widget.as_mut() {
+            Some(generator) => {
+                generator.block(info_block);
+                generator.render_ref(user_info, frame.buffer_mut());
+            }
+            None => {  }
         }
-
-        // {
-        //     let mut lock = match BRAILLE.try_lock() {
-        //         Ok(lock) => lock,
-        //         Err(err) => return,
-        //     };
-        //     Paragraph::new::<String>((&*lock).into()).block(styled_block.clone())
-        //         .render(media_info, frame.buffer_mut());
-        //     drop(lock);
-        // }
-
     }
     fn handle_input(self, code: crossterm::event::KeyCode) {
         match code {
@@ -281,7 +275,7 @@ impl Renderable for &mut CatalogView {
             crossterm::event::KeyCode::Char('l') => {}
             crossterm::event::KeyCode::Char('h') => {}
             crossterm::event::KeyCode::Char('p') => {
-                if let Some(catalog) = &self.catalog {
+                if let Some(Ok(catalog)) = &self.catalog {
                     tracing::info!("Sending API requests");
                     self.api_manifest.send();
                     let mut lock = self.api_manifest.try_lock().unwrap();
@@ -293,6 +287,8 @@ impl Renderable for &mut CatalogView {
                     // update self.media_list with update hashmap values
                     self.update_media_list();
                 } 
+                // if let Some(Err(e)) = &self.catalog {
+                //     tracing::warn!("[CatalogView::handle_input] Tried to generate catalog again after it already failed. (pressed `p`). Error: {e:?}") } 
                 else { self.generate_catalog(); }
             }
             _ => {}

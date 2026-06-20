@@ -42,6 +42,11 @@ impl Default for BrailleLoadingIcon {
         Self::default()
     }
 }
+impl<'a> Into<Span<'a>> for &BrailleLoadingIcon {
+    fn into(self) -> Span<'a> {
+        braille_states[self.index].to_string().into()
+    }
+}
 impl Into<String> for &BrailleLoadingIcon {
     fn into(self) -> String {
         braille_states[self.index].to_string()

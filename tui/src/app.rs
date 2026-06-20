@@ -62,7 +62,6 @@ impl Default for AppState {
 pub struct App {
     tree: Option<Rc<Catalog>>,
     state: AppState,
-    generating_view: Option<GeneratingWidget>,
     error: ErrorCatch,
     exit: bool,
 }
@@ -95,49 +94,19 @@ impl App {
     }
     async fn update(&mut self) -> Result<(), AppUpdateError> {
         match &mut self.state {
-            // AppState::GeneratingCatalog(view) => {
-            //     if view.is_complete() {
-            //         tracing::info!("View is completed!");
-            //         let ptr = view.take().unwrap();
-            //         let catalog_view = CatalogView::new(Some(ptr)).map_err(|e| AppUpdateError::CatalogViewError(e))?;
-            //         self.state = AppState::CatalogView(catalog_view);
-            //         return Ok(())
-            //     }
-            //     // TODO: The flag for `view.is_complete()` never gets set if the catalog building fails.
-            //     // Needs to be rewriten to having `CatalogView` as the ONLY view state, unless we're
-            //     // in some JSON editor.
-            //     match view.poll().await {
-            //         Ok(_) => {},
-            //         Err(err) => { Err(AppUpdateError::GeneratingViewError(err))?; }
-            //     }
-            // }
             AppState::CatalogView(view) => {
                 match view.update().await {
                     Ok(_) => {}
                     Err(e) => {}
                 }
-                // view.post_update();
             }
             _ => {}
         }
         Ok(())
     }
     fn draw(&mut self, frame: &mut Frame) {
-        //* stateful widget doesn't want to work with interior mutability, so we're back to this
-        // TODO: fix using interior mutability with stateful widget. build minimal working example
-        // match &self.state {
-        //     AppState::Postinit                => { self.default_background(frame) },
-        //     AppState::GeneratingCatalog(view) => { self.default_background(frame) },
-        //     AppState::CatalogView(view)       => {},
-        // }
-        // match &mut self.state {
-        //     AppState::Postinit                => {},
-        //     AppState::GeneratingCatalog(view) => { view.render(frame) },
-        //     AppState::CatalogView(view)       => { view.render(frame) },
-        // }
-
         match &mut self.state {
-            AppState::CatalogView(view)       => { view.render(frame) },
+            AppState::CatalogView(view) => { view.render(frame) },
         }
 
         match self.error {
@@ -153,9 +122,9 @@ impl App {
                     .constraints(vec![Constraint::Fill(3), Constraint::Fill(1)])
                     .split(horizontal[1]);
 
-                frame.render_widget(Clear, layout[1]);
+                Clear.render(layout[1], frame.buffer_mut());
                 let paragraph = Paragraph::new(format!("Error: {:?}",self.error)).block(popup_block);
-                frame.render_widget(paragraph, layout[1]);
+                paragraph.render(layout[1], frame.buffer_mut())
             }
         }
     }
@@ -191,7 +160,7 @@ impl App {
             let popup_block = Block::bordered().title("Failed to load configuration!");
             let float = area.centered(Constraint::Percentage(60), Constraint::Percentage(20));
 
-            frame.render_widget(Clear, float);
+            Clear.render(float, frame.buffer_mut());
             let paragraph = Paragraph::new(
                 format!("I failed to load your configuration and had to revert to the default.\nError: {:?}\n{:#?}", CONFIG.load_error, CONFIG.clone()))
                 .bold()

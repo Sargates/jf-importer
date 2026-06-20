@@ -83,11 +83,11 @@ impl Widget for &MediaList {
             .iter()
             .map(|item| {
                 let lock = BRAILLE.try_lock().expect("BRAILLE was locked when drawing MediaList");
-                let label: String = match &*item.status {
+                let label: Span<'_> = match &*item.status {
                     QueryStatus::NotStarted => "[Not Started]".into(),
                     QueryStatus::InProgress => (&*lock).into(),
-                    QueryStatus::Failed(query_error) => "[ ✗ ]".into(),
-                    QueryStatus::Success(query_response) => "[ ✓ ]".into(),
+                    QueryStatus::Failed(query_error) => "[ ✗ ]".red(),
+                    QueryStatus::Success(query_response) => "[ ✓ ]".green(),
                 };
                 Line::from(label).right_aligned().into()
             })
