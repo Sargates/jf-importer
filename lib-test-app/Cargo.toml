@@ -1,0 +1,13 @@
+[package]
+name = "lib-test-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.53.1", features = ["full"] }
+jf-import-library = { path = "../lib" }
+serde = { version = "1.0.229", features = ["derive"] }
+etcetera = "0.11.0"
+toml = "1.1.4"
+ignore = "0.4.33"
+regex = "1.13.1"

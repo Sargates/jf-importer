@@ -34,6 +34,20 @@ impl QueryStatus {
     }
 }
 
+#[derive(Hash, Debug)]
+pub enum ApiSpecificMediaId {
+    // IMDB doesn't actually have an API (that I'm aware of).
+    // So this is acquired from OMDB or by indirection with TMDB
+    /// form: `imdbid-tt[0-9]+`
+    // IMDB(String),
+
+    /// form: `tmdbid-[0-9]+`
+    TMDB(String),
+
+    // Uses IMDB ids
+    /// form: `imdbid-tt[0-9]+`
+    OMDB(String)
+}
 /// Abstracted out response object. Only the things we care about (for now)
 // TODO: make these `pub(crate)`
 #[derive(Debug, Hash)]
@@ -44,7 +58,7 @@ pub struct QueryResponse {
 
     /// (Currently) The TMDB of the item that owns the response.
     // TODO: Make this `enum ApiSpecificId { TMDB(String), OMDB(String) }`
-    pub tmdb: String, 
+    pub tmdb: ApiSpecificMediaId, 
 }
 
 // GLORIOUS CRATE!!!

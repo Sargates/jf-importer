@@ -7,16 +7,16 @@ use toml;
 
 use once_cell::sync::Lazy;
 
-pub static CONFIG: Lazy<Config> = Lazy::new(|| {
-    Config::load_config()
-});
+// pub static CONFIG: Lazy<Config> = Lazy::new(|| {
+//     Config::load_config()
+// });
 pub static SECRETS: Lazy<Secrets> = Lazy::new(|| {
     Secrets::load_secrets()
 });
 
 // I'm implementing PartialEq for these are all `unit-like`
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub enum ConfigLoadError {
+pub enum SecretsLoadError {
     Success,
 
     /// Not necessarily an error
@@ -28,123 +28,48 @@ pub enum ConfigLoadError {
     FailedToReadFile,
     FailedToDeserialize
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
-pub struct Config {
-    #[serde(skip_serializing, skip_deserializing)]
-    pub source_file: PathBuf,
 
-    #[serde(skip_serializing, skip_deserializing)]
-    pub load_error: ConfigLoadError,
+#[derive(Clone, Debug)]
+pub enum ConfigCreationError {
+    IngestBaseDirDoesntExist,
+    IngestMovieDirDoesntExist,
+    IngestShowDirDoesntExist,
+
+    DstBaseDirDoesntExist,
+    DstMovieDirDoesntExist,
+    DstShowDirDoesntExist,
+}
+
+/// Represents a valid configuration file. All checks are performed 
+/// eagerly at config creation. Thus, if a `Config` exists, it is valid.
+///
+/// # Implementors
+/// There is a danger of overwriting the configuration if `Config::load_config`
+/// returns `Err(FailedToDeserialize)` and as a result, you create a default
+/// configuration and call `write_to_file` on the default config. Be aware
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Config {
+    /// Assuming Linux, this is `$HOME/.cache/jf-importer`.
+    /// Windows should (untest) be at `C:\Users\<you>\Appdata\Roaming\jf-importer`
+    /// Like `source_file`, this is `None` iff we can't find the user's home directory.
+    // TODO: properly support non-linux
+    pub CacheDir: Option<PathBuf>,
 
     /// Regex pattern for match any and all video files; movies and shows
     /// Configurable via the config in case I missed something.
     pub VideoFileExtensions: String,
 
-    /// Assuming Linux, this is `$HOME/.cache/jf-importer`.
-    /// Windows should* be at `C:\Users\<you>\Appdata\Roaming\jf-importer`
-    // TODO: properly support non-linux
-    pub CacheDir: PathBuf,
+    /// Source directory name for Movies
+    pub IngestMovieDir: PathBuf,
 
-    /// Directory prefix for movie and show directory names
-    /// As in:
-    ///   Movies are found at `SrcDir.join(SrcMovieSubDir)`
-    ///   Shows are found at `SrcDir.join(SrcShowsSubDir)`
-    /// Both are absolute paths
-    /// Default: Unset
-    pub SrcBaseDir: PathBuf,
+    /// Source directory name for TV Shows
+    pub IngestShowDir: PathBuf,
 
-    /// Source subdirectory name for Movies
-    /// Default: "movies"
-    pub SrcMovieSubDir: String,
+    /// Movie directory for the jellyfin library:
+    pub JfMovieDir: PathBuf,
 
-    /// Source subdirectory name for TV Shows
-    /// Default: "shows"
-    pub SrcShowSubDir: String,
-
-    /// Directory prefix for Jellyfin root directory
-    /// As in:
-    ///   Movies are moved to `DstDir.join(JfMovieDir)`
-    ///   Shows are moved to `DstDir.join(JfShowsDir)`
-    /// Both are absolute paths
-    /// Default: Unset
-    pub DstBaseDir: PathBuf,
-
-    /// Movie subdirectory for the destination:
-    /// Default: "movies"
-    pub JfMovieDir: String,
-
-    /// Movie subdirectory for the destination:
-    /// Default: "tvseries"
-    pub JfShowsDir: String,
-}
-impl Config {
-    fn load_config() -> Config {
-        let base = etcetera::choose_base_strategy().map_err(|_| ConfigLoadError::FailedToFindHomeDir);
-        if let Err(e) = base {
-            let mut cfg: Config = Config::default_config();
-            cfg.load_error = e;
-            return cfg;
-        }
-        let base = base.unwrap();
-        let default = PathBuf::new();
-        let CacheDir = base.cache_dir().join("jf-importer");
-
-        let cfg_file = base.config_dir().join("jf-importer").join("config.toml");
-        if ! cfg_file.exists() { return Err(ConfigLoadError::FileDoesNotExist).into(); }
-
-        // println!("Reading File: {}", cfg_file.to_string_lossy());
-        let content = match fs::read_to_string(cfg_file) {
-            Err(e) => return Err(ConfigLoadError::FailedToReadFile).into(),
-            Ok(content) => content
-        };
-
-        let mut cfg = match toml::from_str::<Config>(&content) {
-            Err(err) => Err(ConfigLoadError::FailedToDeserialize).into(),
-            Ok(cfg) => cfg
-        };
-        cfg.load_error = ConfigLoadError::Success;
-        cfg
-    }
-    fn default_config() -> Config {
-        let default = PathBuf::new();
-        let base = etcetera::choose_base_strategy().map_err(|_| ConfigLoadError::FailedToFindHomeDir);
-        let VideoFileExtensions = "(webm|mp4|mov|mkv|m4v|avi)".to_string();
-        let SrcBaseDir   = PathBuf::from("/path/to/sources");
-        let DstBaseDir   = PathBuf::from("/path/to/jellyfin");
-
-        if let Err(err) = base {
-            let mut cfg: Config = Default::default();
-            cfg.load_error = err;
-            return cfg;
-        }
-        let base = base.unwrap();
-        let CacheDir = base.cache_dir().join("jf-importer");
-        let cfg_file = base.config_dir().join("jf-importer").join("config.toml");
-
-        Config {
-            source_file: cfg_file, load_error: ConfigLoadError::RevertedToDefault,
-            VideoFileExtensions, CacheDir,
-            SrcBaseDir, DstBaseDir,
-            SrcMovieSubDir: "movies".to_string(), SrcShowSubDir: "shows".to_string(),
-            JfMovieDir: "movies".to_string(),     JfShowsDir: "tvseries".to_string(),
-        }
-    }
-    pub fn write_to_file(&self) -> io::Result<()> {
-        fs::write(self.source_file.as_path(), toml::to_string(&self).unwrap());
-        Ok(())
-    }
-}
-impl From<Result<Config, ConfigLoadError>> for Config {
-    fn from(value: Result<Config, ConfigLoadError>) -> Self {
-        match value {
-            Ok(cfg) => cfg,
-            Err(err) => {
-                let mut cfg: Config = Config::default_config();
-                cfg.load_error = err;
-                return cfg;
-            }
-        }
-    }
+    /// Show directory for the jellyfin library:
+    pub JfShowDir: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,14 +78,14 @@ pub struct Secrets {
     pub source_file: PathBuf,
 
     #[serde(skip_serializing, skip_deserializing)]
-    pub load_error: ConfigLoadError,
+    pub load_error: SecretsLoadError,
 
     pub OMDB_KEY: String,
     pub TMDB_KEY: String,
 }
 impl Secrets {
     pub fn load_secrets() -> Secrets {
-        let base = etcetera::choose_base_strategy().map_err(|_| ConfigLoadError::FailedToFindHomeDir);
+        let base = etcetera::choose_base_strategy().map_err(|_| SecretsLoadError::FailedToFindHomeDir);
         if let Err(e) = base {
             let mut secrets: Secrets = Secrets::default();
             secrets.load_error = e;
@@ -168,22 +93,22 @@ impl Secrets {
         }
         let base = base.unwrap();
         let secrets_file = base.config_dir().join("jf-importer").join("secrets.toml");
-        if ! secrets_file.exists() { return Err(ConfigLoadError::FileDoesNotExist).into(); }
+        if ! secrets_file.exists() { return Err(SecretsLoadError::FileDoesNotExist).into(); }
         
         let content = match fs::read_to_string(secrets_file) {
-            Err(e) => return Err(ConfigLoadError::FailedToReadFile).into(),
+            Err(e) => return Err(SecretsLoadError::FailedToReadFile).into(),
             Ok(content) => content
         };
 
         let mut secrets = match toml::from_str::<Secrets>(&content) {
-            Err(err) => return Err(ConfigLoadError::FailedToDeserialize).into(),
+            Err(err) => return Err(SecretsLoadError::FailedToDeserialize).into(),
             Ok(cfg) => cfg
         };
-        secrets.load_error = ConfigLoadError::Success;
+        secrets.load_error = SecretsLoadError::Success;
         secrets
     }
     pub fn default() -> Secrets {
-        let base = etcetera::choose_base_strategy().map_err(|_| ConfigLoadError::FailedToFindHomeDir);
+        let base = etcetera::choose_base_strategy().map_err(|_| SecretsLoadError::FailedToFindHomeDir);
         if let Err(e) = base {
             let mut cfg: Secrets = Secrets::default();
             cfg.load_error = e;
@@ -191,17 +116,17 @@ impl Secrets {
         }
         let base = base.unwrap();
         let secrets_file = base.config_dir().join("jf-importer").join("secrets.toml");
-        if ! secrets_file.exists() { return Err(ConfigLoadError::FileDoesNotExist).into(); }
+        if ! secrets_file.exists() { return Err(SecretsLoadError::FileDoesNotExist).into(); }
         Secrets{
             source_file: secrets_file,
-            load_error: ConfigLoadError::RevertedToDefault,
+            load_error: SecretsLoadError::RevertedToDefault,
             OMDB_KEY: "".to_string(),
             TMDB_KEY: "".to_string()
         } 
     }
 }
-impl From<Result<Secrets, ConfigLoadError>> for Secrets {
-    fn from(value: Result<Secrets, ConfigLoadError>) -> Self {
+impl From<Result<Secrets, SecretsLoadError>> for Secrets {
+    fn from(value: Result<Secrets, SecretsLoadError>) -> Self {
         match value {
             Ok(cfg) => cfg,
             Err(err) => {
@@ -212,26 +137,4 @@ impl From<Result<Secrets, ConfigLoadError>> for Secrets {
         }
     }
 }
-
-// fn new_api_cache_file() -> PathBuf {
-//     CONFIG.CacheDir.join("NewFile")
-// }
-
-// fn main() {
-//     let file = "Test.toml";
-//     let conf = CONFIG.clone();
-//     let string: String = toml::to_string(&conf).unwrap();
-//     
-//     if let Err(err) = fs::write(file, string) {
-//         println!("Failed to write file! Error: {}", err);
-//         return;
-//     }
-//
-//     let content = fs::read_to_string(file).unwrap();
-//     let from_file: Config = toml::from_str(&content).unwrap();
-//
-//     assert!(conf == from_file);
-//     println!("{:#?}", from_file);
-//     println!("New Cache File: {:?}", new_api_cache_file());
-// }
 

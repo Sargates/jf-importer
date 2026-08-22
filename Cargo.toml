@@ -3,5 +3,9 @@ resolver = "3"
 members = [
     "tui",
     "lib",
+    "lib-test-app",
 ]
 
+[profile.release-with-debug]
+inherits = "release"
+debug = true

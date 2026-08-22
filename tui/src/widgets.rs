@@ -6,12 +6,14 @@ pub mod catalog_view;
 pub mod generating_widget;
 pub mod media_list;
 pub mod utils;
+pub mod fallback_view;
 
 // pub use miller_columns::MillerColumn;
 pub use catalog_view::CatalogView;
 pub use generating_widget::*;
 pub use media_list::*;
 pub use utils::*;
+pub use fallback_view::*;
 
 pub mod error {
     pub use super::catalog_view::TreeViewError;

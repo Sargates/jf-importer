@@ -7,7 +7,6 @@ use crossterm::{
 };
 
 use futures::FutureExt;
-use jf_import_library::api::client::TMDBClient;
 use ratatui::{
     *,
     layout::*,
@@ -16,16 +15,30 @@ use ratatui::{
     style::{Color,Stylize}
 };
 
-use jf_import_library::{
-    media::{self, CatalogBuildError, Catalog},
-    config::{CONFIG, ConfigLoadError},
+
+use jfi::{
+    media,
+    api::client::TMDBClient,
+    catalog::*,
+    config::*,
 };
 
 use tokio::{self, select, sync::watch};
 use futures::executor::block_on;
 
-use crate::widgets::{self, Renderable, CatalogView, GeneratingWidget, error::*};
+use crate::widgets::{self, *, error::*};
 use crate::logging::*;
+use crate::config::*;
+
+use self::AppState::RevertedToDefaultConfig;
+use self::KilledBy::NaturalCauses;
+
+#[derive(Default, Debug)]
+enum KilledBy {
+    #[default]
+    NaturalCauses,
+    FailedToRevertToDefaultConfig, // unrecoverable, for now
+}
 
 #[derive(Default, Debug)]
 enum ErrorCatch {
@@ -43,33 +56,59 @@ enum AppUpdateError {
 }
 
 enum AppState {
-    // #[default]
-    // Postinit,
-    // GeneratingCatalog(GeneratingView),
-    CatalogView(CatalogView)
-}
-// can't derive for non-unit variants
-impl Default for AppState {
-    fn default() -> Self {
-        Self::CatalogView(
-            CatalogView::default()
-                .with_client(Arc::new(TMDBClient::new()))
-        )
-    }
+    CatalogView(CatalogView),
+    RevertedToDefaultConfig,
+    InvalidConfigSupplied,
 }
 
-#[derive(Default)]
 pub struct App {
+    config: Option<Arc<jfi::Config>>,
     tree: Option<Rc<Catalog>>,
     state: AppState,
     error: ErrorCatch,
-    exit: bool,
+    exit: Option<KilledBy>,
 }
+
+
 impl App {
-    pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+    pub fn new() -> App {
+        let jfi_config = JfiConfig::load_config();
+
+        let (state, config) = if let Ok(cfg) = jfi_config {
+            match <JfiConfig as TryInto<jfi::Config>>::try_into(cfg) {
+                Ok(c) => {
+                    let cfg = Arc::new(c);
+                    (AppState::CatalogView(CatalogView::new(cfg.clone())
+                        .with_client(Arc::new(TMDBClient::new()))), Some(cfg))
+                }
+                Err(e) => {
+                    tracing::info!("Config loaded from file is not a valid library configuration. Error: {:?}", e);
+                    (AppState::InvalidConfigSupplied, None)
+                }
+            }
+        }
+        else { (AppState::RevertedToDefaultConfig, None) };
+
+        let exit = if let None = config {
+               Some(KilledBy::FailedToRevertToDefaultConfig) }
+        else { None };
+
+        App {
+            config,
+            tree: None,
+            state,
+            error: ErrorCatch::NoError,
+            exit,
+        }
+    }
+    pub async fn run(&mut self) -> io::Result<()> {
         tracing::info!("Starting!!");
         
-        while !self.exit {
+        // `ratatui::run` expects a synchronous closure, this is just ripped from `ratatui::run` and
+        // changed to move `terminal` since it isn't used elsewhere
+        let mut terminal = ratatui::init();
+
+        while let None = self.exit {
             terminal.draw(|frame| self.draw(frame))?;
             self.handle_events()?;
             select! {
@@ -79,7 +118,7 @@ impl App {
                         Err(e) => { tracing::error!("An error occured: Error: {:?}", e); }
                     }
                 }
-                //* I think putting a timeout in this outer `select!` can cause a race condition by 
+                //* I think putting a timeout in this outer `select!` can cause a race condition by
                 //* the timeout trashing whatever work is being done in `update`.
                 //* Maybe not because we're not `await`ing across writes; control is never
                 //* relinquished while writing so we're never in an undefined state
@@ -90,6 +129,15 @@ impl App {
                 // }
             }
         }
+
+        ratatui::restore();
+
+        let death = self.exit.take().unwrap();
+        if let KilledBy::NaturalCauses = death {}
+        else {
+            println!("Exited with Error: {:?}", death);
+        }
+
         Ok(())
     }
     async fn update(&mut self) -> Result<(), AppUpdateError> {
@@ -102,11 +150,19 @@ impl App {
             }
             _ => {}
         }
+
+        // cycle the static braille widget
+        match BRAILLE.try_lock() {
+            Ok(mut lock) => lock.tick_next(),
+            Err(err) => tracing::error!("Failed to acquire lock for ticking braille widget: Err: {}", err),
+        };
         Ok(())
     }
     fn draw(&mut self, frame: &mut Frame) {
         match &mut self.state {
-            AppState::CatalogView(view) => { view.render(frame) },
+            AppState::CatalogView(view)       => { view.render(frame) },
+            AppState::RevertedToDefaultConfig => { ConfigView::render(frame) },
+            AppState::InvalidConfigSupplied => {},
         }
 
         match self.error {
@@ -128,47 +184,47 @@ impl App {
             }
         }
     }
-    fn default_background(&self, frame: &mut Frame) {
-        let area = frame.area();
-        let title = Line::from(" Counter App Tutorial ".bold());
-        let instructions = Line::from(vec![
-            " ".into(),
-            "Decrement ".into(),
-            format!("<{}>",KeyCode::Left).blue().bold(),
-            " Increment ".into(),
-            format!("<{}>",KeyCode::Right).blue().bold(),
-            " Quit ".into(),
-            format!("<{}>",KeyCode::Char('q')).blue().bold(),
-            " Load Catalog ".into(),
-            format!("<{}>",KeyCode::Char('p')).blue().bold(),
-            " ".into(),
-        ]);
-
-        let layout = Layout::vertical([Constraint::Percentage(50); 2]);
-        let [top, bottom] = area.layout(&layout);
-        frame.render_widget(
-            Paragraph::new("outer 0")
-                .block(Block::new().bold().fg(Color::Red).borders(Borders::ALL).title_top(title.clone()).title_bottom(instructions.clone().centered())),
-            top
-        );
-        frame.render_widget(
-            Paragraph::new("outer 1")
-                .block(Block::new().bold().fg(Color::Yellow).borders(Borders::ALL).title_top(title.clone()).title_bottom(instructions.clone().centered())),
-            bottom
-        );
-        if CONFIG.load_error != ConfigLoadError::Success {
-            let popup_block = Block::bordered().title("Failed to load configuration!");
-            let float = area.centered(Constraint::Percentage(60), Constraint::Percentage(20));
-
-            Clear.render(float, frame.buffer_mut());
-            let paragraph = Paragraph::new(
-                format!("I failed to load your configuration and had to revert to the default.\nError: {:?}\n{:#?}", CONFIG.load_error, CONFIG.clone()))
-                .bold()
-                .fg(Color::Red)
-                .block(popup_block);
-            frame.render_widget(paragraph, float);
-        }
-    }
+    // fn default_background(&self, frame: &mut Frame) {
+    //     let area = frame.area();
+    //     let title = Line::from(" Counter App Tutorial ".bold());
+    //     let instructions = Line::from(vec![
+    //         " ".into(),
+    //         "Decrement ".into(),
+    //         format!("<{}>",KeyCode::Left).blue().bold(),
+    //         " Increment ".into(),
+    //         format!("<{}>",KeyCode::Right).blue().bold(),
+    //         " Quit ".into(),
+    //         format!("<{}>",KeyCode::Char('q')).blue().bold(),
+    //         " Load Catalog ".into(),
+    //         format!("<{}>",KeyCode::Char('p')).blue().bold(),
+    //         " ".into(),
+    //     ]);
+    //
+    //     let layout = Layout::vertical([Constraint::Percentage(50); 2]);
+    //     let [top, bottom] = area.layout(&layout);
+    //     frame.render_widget(
+    //         Paragraph::new("outer 0")
+    //             .block(Block::new().bold().fg(Color::Red).borders(Borders::ALL).title_top(title.clone()).title_bottom(instructions.clone().centered())),
+    //         top
+    //     );
+    //     frame.render_widget(
+    //         Paragraph::new("outer 1")
+    //             .block(Block::new().bold().fg(Color::Yellow).borders(Borders::ALL).title_top(title.clone()).title_bottom(instructions.clone().centered())),
+    //         bottom
+    //     );
+    //     if CONFIG.load_error != SecretsLoadError::Success {
+    //         let popup_block = Block::bordered().title("Failed to load configuration!");
+    //         let float = area.centered(Constraint::Percentage(60), Constraint::Percentage(20));
+    //
+    //         Clear.render(float, frame.buffer_mut());
+    //         let paragraph = Paragraph::new(
+    //             format!("I failed to load your configuration and had to revert to the default.\nError: {:?}\n{:#?}", CONFIG.load_error, CONFIG.clone()))
+    //             .bold()
+    //             .fg(Color::Red)
+    //             .block(popup_block);
+    //         frame.render_widget(paragraph, float);
+    //     }
+    // }
     fn handle_events(&mut self) -> io::Result<()> {
         // switch this to crossterm::event::poll
         if event::poll(Duration::from_millis(0))? {
@@ -187,11 +243,11 @@ impl App {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
             KeyCode::Char('q') => {
-                if CONFIG.load_error != ConfigLoadError::Success {
-                    if let Err(e) = CONFIG.clone().write_to_file() {
-                        tracing::error!("Failed to write config!");
-                    }
-                }
+                // if CONFIG.load_error != SecretsLoadError::Success {
+                //     if let Err(e) = CONFIG.clone().write_to_file() {
+                //         tracing::error!("Failed to write config!");
+                //     }
+                // }
                 self.exit()
             }
             _ => {
@@ -206,10 +262,12 @@ impl App {
                     //     }
                     // }
                     // AppState::GeneratingCatalog(view) => {}, // no user input
-                    AppState::CatalogView(view) => view.handle_input(key_event.code)
+                    AppState::CatalogView(view) => view.handle_input(key_event.code),
+                    AppState::RevertedToDefaultConfig => {},
+                    AppState::InvalidConfigSupplied => {},
                 }
             }
         }
     }
-    fn exit(&mut self) { self.exit = true; }
+    fn exit(&mut self) { self.exit = Some(NaturalCauses); }
 }

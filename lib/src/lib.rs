@@ -4,6 +4,8 @@
 #![allow(unused_variables)]
 #![allow(unused)]
 
+#![feature(impl_trait_in_fn_trait_return)]
+
 //# TUI Program
 //  Interactive TUI program like ranger
 //     Vim controls: `hjkl`, other motions
@@ -37,8 +39,8 @@
 //    Path and info
 
 pub mod config;
+pub use config::*;
 pub mod media;
 pub mod api;
-// pub mod flux;
-
+pub mod catalog;
 

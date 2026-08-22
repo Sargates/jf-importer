@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use crate::config::SECRETS;
 use crate::media::{MediaItem, Movie, Show, Episode};
 use crate::api::{
-    client::{ApiClient, QueryStatus, QueryResponse},
+    client::{ApiClient, QueryStatus, QueryResponse, ApiSpecificMediaId},
     error::QueryError,
 };
 
@@ -95,7 +95,7 @@ impl TryInto<QueryResponse> for TMDBSearchResponse {
             title: self.title,
             year: str::parse::<u32>(&collection).map_err(|_| QueryError::TMDBFailedToConvertFromResponse)?,
             imdb: self.imdb_id.is_empty().then(|| self.imdb_id),
-            tmdb: format!("{}", self.id),
+            tmdb: ApiSpecificMediaId::TMDB(format!("{}", self.id)),
         })
     }
 }
@@ -139,7 +139,7 @@ pub struct TMDBClient {
 impl TMDBClient {
     pub fn new() -> Self {
         let rate_limiter = RateLimiter::direct(
-            Quota::per_second(std::num::NonZeroU32::new(20).unwrap())
+            Quota::per_second(std::num::NonZeroU32::new(12).unwrap())
         );
         Self {
             client: Client::new(),
@@ -156,12 +156,10 @@ impl ApiClient for TMDBClient {
         if self.key.is_empty() { return QueryStatus::Failed(QueryError::UnsetApiKey) }
         self.rate_limiter.until_ready().await;
 
-        // let mut guard = movie.lock().await;
-        let file_stem = movie.src.file_stem().unwrap().to_str().unwrap().to_string();
+        let file_stem = movie.search_term.clone();
 
         let encoded = urlencoding::encode(&file_stem);
         let url = format!("https://api.themoviedb.org/3/search/movie?query={}&api_key={}", encoded, self.key);
-        // println!("Curling: {}", url);
 
         let response = match self.client.get(&url).send().await.map_err(|e| e.into()) {
             Ok(r) => r,
@@ -214,7 +212,7 @@ impl ApiClient for TMDBClient {
         // println!("Waiting for lock!");
         // let mut guard = show.lock().await;
         // println!("Acquired Lock: {:?}", guard.src);
-        let file_stem = show.src.file_name().unwrap().to_str().unwrap().to_string();
+        let file_stem = show.search_term.clone();
         // println!("Src: {:?}, Name: {:?}", guard.src, guard.src.file_name().unwrap());
 
         let encoded = urlencoding::encode(&file_stem);

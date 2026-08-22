@@ -3,6 +3,7 @@ use std::hash::Hash;
 use std::sync::{Arc,Weak};
 use std::path::{Path, PathBuf};
 
+use serde_json::to_string;
 use tokio::sync::Mutex;
 use futures::executor::block_on;
 
@@ -59,22 +60,89 @@ impl MediaItem {
     }
 }
 
+// To comment on the robustness of the following functions, These two functions were 
+// able to handle all but 4 of my catalog of 361 movies and TV box 
+// sets. And the 4 that failed were too generic or too specific to 
+// find the correct result from the API anyway; they would need to 
+// be manually tuned.
+
+/// Auto trim file/dir names into searchable alternatives.
+/// Not very robust, just more than nothing. Use a user-controlled alternative.
+/// # Examples: 
+/// - `Mission: Impossible III - [dvd]`
+///   -> `"Mission: Impossible III"`
+/// - `Pirates of the Caribbean - At World's End (2007) [tt0449088] [Bluray-1080p]`
+///   -> `"Pirates of the Caribbean - At World's End"`
+fn auto_trim_search_term<'a>(term: &'a str) -> String {
+    let tag_trim = Regex::new(r"( *\[.*?\] *| *\(.*?\) *)").unwrap(); // jellyfin tags
+    let decoration_trim = Regex::new(r"- *$").unwrap();               // leftover hyphen decorations
+    let term: String = tag_trim.split(&term).collect();
+    let term: String = decoration_trim.split(&term).collect();
+    let term = term.trim().to_string();                               // trim
+    term
+}
+
+/// Parse JF-supported tags from file names
+/// Much like `auto_trim_search_term`, not robust. 
+/// Nothing will beat user-controlled tagging.
+pub fn tag_extract<'a>(term: &'a str) -> Vec<String> {
+    let year_re = Regex::new(r"\([0-9]+?\)").unwrap();
+    let id_re   = Regex::new(r"(\[[a-z]+?id-[a-z]*[0-9]+?\]|\[[a-z]*[0-9]+\])").unwrap(); 
+    let tag_re  = Regex::new(r"\[.*?\]").unwrap();
+
+    // remove all year identifiers that may be embedded in the file name
+    let minus_year: String = year_re.split(term).collect();
+    // remove ID. only want to remove the first instance to avoid deleting tags
+    let minus_year_and_id: String = match id_re.find(&minus_year) {
+        Some(m) => {
+            let (left, garb_and_right) = minus_year.split_at(m.start());
+            let (garb, right) = garb_and_right.split_at(m.len());
+            let out = left.to_string() + right;
+            out
+        }
+        None => minus_year.clone()
+    };
+
+    let tags_iter: Vec<String> = tag_re.find_iter(&minus_year_and_id)
+        .map(|m| {
+            // trim first and last character of tag since match will contain `[]` 
+            // and regex crate doesn't support lookahead/lookbehind
+            let mut chars = m.as_str().chars();
+            chars.next();
+            chars.next_back();
+            chars.as_str().to_string()
+        })
+        .collect();
+
+    tags_iter
+}
+
 #[derive(Debug)]
 pub struct Movie {
     pub src: PathBuf,
+    pub search_term: String,
+    pub tags: Vec<String>,
 }
 impl Movie {
-    // TODO: How does this work for testing? How do we create dummy movies/episodes for testing?
-    pub(crate) fn new(path: PathBuf) -> Result<Self, MediaCreateError> {
+    /// It is expected that `path` exists and is a **file**.
+    pub fn new(path: PathBuf) -> Result<Self, MediaCreateError> {
         let opt = path.to_str();
         if let None = opt   { return Err(MediaCreateError::PathNotUnicode); }
-        if ! path.is_file() { return Err(MediaCreateError::IncorrectFileTypeSupplied); }
+        // if ! path.is_file() { return Err(MediaCreateError::IncorrectFileTypeSupplied); }
+
+        let stem: &str = &path.file_stem()
+            .ok_or(MediaCreateError::IncorrectFileTypeSupplied)?
+            .to_string_lossy();
+
+        let search_term = auto_trim_search_term(stem);
+        let tags = tag_extract(stem);
+
         let src = path;
-        let query = Mutex::new(QueryStatus::NotStarted);
-        Ok(Movie{ src })
+        Ok(Movie{ src, search_term, tags })
     }
     pub fn raw_media_label(&self) -> String {
-        self.src.file_stem().unwrap().to_string_lossy().to_string()
+        self.search_term.clone()
+        // self.src.file_stem().unwrap().to_string_lossy().to_string()
     }
 }
 
@@ -82,18 +150,24 @@ impl Movie {
 pub struct Show {
     pub src: PathBuf, // directory containing show
     pub episodes: Mutex<Vec<Arc<Episode>>>,
+    pub search_term: String,
 }
 impl Show {
-    /// Assumes `movies_dir` exists and is structured correctly
-    /// Benefit of doing it this way is that tests are easier to write
+    /// It is expected that `path` exists and is a **directory**.
     pub(crate) fn new(path: PathBuf) -> Result<Self, MediaCreateError> {
         let opt = path.to_str();
         if let None = opt  { return Err(MediaCreateError::PathNotUnicode); }
-        if ! path.is_dir() { return Err(MediaCreateError::IncorrectFileTypeSupplied) }
+        // if ! path.is_dir() { return Err(MediaCreateError::IncorrectFileTypeSupplied) }
+
+        let stem: &str = &path.file_stem()
+            .ok_or(MediaCreateError::IncorrectFileTypeSupplied)?
+            .to_string_lossy();
+        let search_term = auto_trim_search_term(stem);
+        // let tags = tag_extract(stem);
+
         let src = path;
-        let query = Mutex::new(QueryStatus::NotStarted);
         let episodes = Mutex::new(vec![]);
-        Ok(Show{ src, episodes })
+        Ok(Show{ src, episodes, search_term })
     }
     pub fn raw_media_label(&self) -> String {
         self.src.file_name().unwrap().to_string_lossy().to_string()
@@ -155,7 +229,6 @@ impl Episode {
 
         let src = path;
         let id = EpisodeId::Traditional { season, episode };
-        let query = Mutex::new(QueryStatus::NotStarted);
 
         Ok(Episode{ src, id, parent })
     }

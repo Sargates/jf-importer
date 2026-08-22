@@ -13,8 +13,8 @@ use ratatui::style::palette::tailwind::{BLUE, GREEN, SLATE};
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use jf_import_library::media::MediaItem;
-use jf_import_library::api::client::{QueryResponse, QueryStatus};
+use jfi::media::MediaItem;
+use jfi::api::client::{QueryResponse, QueryStatus};
 
 use crate::widgets::BRAILLE;
 
@@ -124,40 +124,4 @@ impl Widget for &MediaList {
         StatefulWidget::render(&statuses, area, buf, &mut lock);
     }
 }
-
-// impl Into<ListItem> for MediaListItem {
-//     fn into(self) -> ListItem {
-//         let mut src: Span = match &self.inner {
-//             MediaItem::Movie(inner)   => inner.src.to_string_lossy().into(),
-//             MediaItem::Show(inner)    => inner.src.to_string_lossy().into(),
-//             MediaItem::Episode(inner) => inner.src.to_string_lossy().into(),
-//         };
-//         let tag: Span = match self.status {
-//             QueryStatus::Success(query) => "".into(), // no tag
-//             QueryStatus::Failed(err)    => "[Failure]".into(),
-//             QueryStatus::NotStarted     => "[NotStarted]".into(),
-//             QueryStatus::InProgress     => "[InProgress]".into()
-//         };
-//         match self.status {
-//             QueryStatus::Success(query) => {
-//                 src = format!("{} ({}) [imdb-{}]", query.title, query.year, query.tmdb).into();
-//             },
-//             _ => {}
-//         }
-//         let [title, tag_area] = Layout::horizontal(vec![
-//             Constraint::Fill(1),
-//             Constraint::Length(tag.to_string().len() as u16),
-//         ]).areas(self.area);
-//         let line = Line::from(vec![
-//             src,
-//             " ".repeat(self.area.width - ),
-//             tag
-//         ]);
-//         let mut buffer = Buffer::empty(self.area);
-//         Widget::render(src, title,    &mut buffer);
-//         Widget::render(tag, tag_area, &mut buffer);
-//
-//         ListItem::from(Text::from(buffer.content))
-//     }
-// }
 

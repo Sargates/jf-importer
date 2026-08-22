@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "jf_import_library"
+name = "jfi"
 path = "src/lib.rs"
 
 [dependencies]
@@ -25,4 +25,5 @@ async-trait = "0.1.89"
 tracing = "0.1.44"
 tracing-error = "0.2.1"
 tracing-subscriber = "0.3.23"
+itertools = "0.15.0"
 

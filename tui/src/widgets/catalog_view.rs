@@ -9,7 +9,7 @@ use ratatui::{
 };
 use ratatui::style::palette::tailwind::{BLUE, GREEN, SLATE};
 
-use futures::stream::{StreamExt, FuturesUnordered};
+use futures::{future, stream::{FuturesUnordered, StreamExt}};
 use tokio::task::JoinHandle;
 use tokio::select;
 
@@ -18,19 +18,17 @@ use std::cell::RefCell;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use jf_import_library::api::{
-    self, calls::*, client::*
+use jfi::{
+    api::{ self, calls::*, client::* },
+    config::Config,
+    catalog::{Catalog, CatalogBuilder},
+    media::MediaItem, 
 };
-// use jf_import_library::api::{self, ApiCall, ApiCallFuture, ApiManifest, QueryStatus, TMDBClient, error::QueryError};
-use jf_import_library::media::{
-    Catalog, CatalogBuilder,
-    MediaItem, 
-};
-use jf_import_library::config::CONFIG;
 
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::widgets::*;
+use crate::config::*;
 
 pub enum TreeViewUpdateError {
 
@@ -52,9 +50,9 @@ pub enum InfoWidgetError {
     GeneratingCatalog(GeneratingWidgetError)
 }
 
-#[derive(Default)]
 pub struct CatalogView {
-    catalog: Option<Result<Catalog, GeneratingWidgetError>>,
+    config: Arc<Config>,
+    catalog: Option<Catalog>,
     
     api_client: Option<Arc<dyn api::client::ApiClient + Send + Sync>>,
     api_manifest: ApiManifest,
@@ -66,53 +64,77 @@ pub struct CatalogView {
 }
 
 impl CatalogView {
+    pub fn new(config: Arc<jfi::Config>) -> Self {
+        Self {
+            config,
+            catalog: None,
+            api_client: None,
+            api_manifest: ApiManifest::default(),
+            info_widget: None,
+            media_list: MediaList::default(),
+        }
+    }
     pub fn with_client(mut self, client: Arc<dyn api::client::ApiClient+Sync+Send>) -> Self {
         self.api_client = Some(client);
         self.stage_api_calls();
         self
     }
     pub fn with_catalog(mut self, catalog: Catalog) -> Self {
-        self.catalog = Some(Ok(catalog));
+        self.catalog = Some(catalog);
         self.update_media_list();
         self
     }
     pub async fn update(&mut self) -> Result<(), TreeViewUpdateError> {
+        // make an intermediate future to check conditions
+        // that require making multiple method calls
+        let info_status = async {
+            // if the info widget is invalid, `select!` should never
+            // resolve this branch, so return pending
+            if let Some(ref mut widget) = self.info_widget && !widget.received_error() 
+                 { widget.poll().await }
+            else { future::pending().await }
+        };
         select! {
             Some(res) = self.api_manifest.next(), if !self.api_manifest.is_empty() => {
                 self.process_api_result(res);
             }
-            status = async { self.info_widget.as_mut().unwrap().poll().await }, if self.info_widget.is_some() => {
+            status = info_status => {
                 match status {
-                    Ok(_) => { self.take_catalog(); },
-                    Err(err) => { tracing::info!("Error generating config: {:?}", err); },
+                    Ok(_) => { self.ingest_if_complete(); },
+                    Err(err) => { tracing::info!("Error generating catalog: {:?}", err); },
                 }
             }
             _ = futures::future::ready(()) => {} // non-blocking await
         }
 
-        match BRAILLE.try_lock() {
-            Ok(mut lock) => lock.tick_next(),
-            Err(err) => tracing::error!("Failed to acquire lock for ticking braille widget: Err: {}", err),
-        };
         Ok(())
     }
-    pub fn take_catalog(&mut self) -> Result<(), TreeViewUpdateError> {
-        if let Some(generator) = &mut self.info_widget && generator.is_complete() {
-            tracing::info!("[CatalogView::post_update] Generation complete");
-            let generator = generator.take();
-            tracing::info!("[CatalogView::post_update] Here1");
-            if let Some(catalog) = &generator {
-                tracing::info!("[CatalogView::post_update] Catalog Generated");
-                self.set_catalog(generator);
-                self.stage_api_calls(); // re-stage API calls for outgoing
+    pub fn ingest_if_complete(&mut self) {
+        if let Some(ref mut widget) = self.info_widget {
+            // let status = widget.received_error();
+
+            if widget.is_complete() {
+                tracing::info!("Generating widget is completed. Extracting result");
+
+                let catalog: Option<Catalog> = match widget.take() {
+                    Some(Ok(c)) => Some(c),
+                    Some(Err(e)) => {
+                        tracing::info!("[ingest_if_complete] While extracting the catalog, it was found to have an error while generating.");
+                        None
+                    },
+                    _ => {
+                        panic!("`GeneratingWidget::is_completed` returned true while `GeneratingWidget::widget.take` returned `None`");
+                    }
+                };
+
+                self.set_catalog(catalog);
+                self.info_widget = None; // delete the info widget
             }
-            tracing::info!("[CatalogView::post_update] Here2");
-            self.info_widget = None;
         }
-        Ok(())
     }
     fn stage_api_calls(&mut self) {
-        if let Some(Ok(catalog)) = &self.catalog && let Some(client) = &self.api_client {
+        if let Some(ref catalog) = self.catalog && 
+           let Some(ref client) = self.api_client {
             for media in catalog.iter_all() {
                 let future = ApiCallFuture::new(media.clone(), client.clone());
                 self.api_manifest.push_future(future);
@@ -123,29 +145,30 @@ impl CatalogView {
                 lock.insert(media.clone(), status.clone());
             }
         }
-        else if let Some(Err(e)) = &self.catalog {
-            tracing::warn!("Tried to stage api calls while `self.catalog` failed to generate. Error: {e:?}") }
-        else { tracing::warn!("Tried to stage api calls while `self.catalog: None`") }
+        // else { tracing::warn!("Tried to stage api calls while `self.catalog: None`") }
     }
     fn update_media_list(&mut self) {
-        if let Some(Ok(catalog)) = &self.catalog {
-            self.media_list.update(catalog.iter_all()
-                .map(|media| {
-                    let lock = self.api_manifest.try_lock().unwrap();
-                    let status = match lock.get(&media) {
-                        Some(rc) => rc.clone(),
-                        None => Rc::new(QueryStatus::NotStarted),
-                    };
-                    drop(lock);
-                    MediaListItem {
-                        inner: media.clone(),
-                        status,
-                    }
-                })
-                .collect());
+        if let Some(catalog) = &self.catalog {
+            tracing::info!("Updating media list");
+            self.media_list.update(
+                catalog.iter_all_sorted(Some(&self.api_manifest))
+                    .map(|media| {
+                        let lock = self.api_manifest.try_lock().unwrap();
+                        let status = match lock.get(&media) {
+                            Some(rc) => rc.clone(),
+                            None => Rc::new(QueryStatus::NotStarted),
+                        };
+                        drop(lock);
+                        MediaListItem {
+                            inner: media.clone(),
+                            status,
+                        }
+                    })
+                    .collect()
+            );
         }
-        else if let Some(Err(e)) = &self.catalog {
-            tracing::warn!("Tried to update media list while `self.catalog` failed to generate. Error: {e:?}") }
+        // else if let Some(Err(e)) = &self.catalog {
+        //     tracing::warn!("Tried to update media list while `self.catalog` failed to generate. Error: {e:?}") }
         else { tracing::warn!("Tried to update media list while `self.catalog: None`") }
     }
     fn select_next(&mut self)     { self.media_list.select_next(); }
@@ -153,19 +176,19 @@ impl CatalogView {
 
     pub fn get_client(&self) -> Option<Arc<dyn api::client::ApiClient+Sync+Send>> { self.api_client.clone() }
     pub fn set_client(&mut self, client: Option<Arc<dyn api::client::ApiClient+Sync+Send>>) { self.api_client = client; self.stage_api_calls(); }
-    pub fn get_catalog(&self) -> Option<&Result<Catalog,GeneratingWidgetError>>   { self.catalog.as_ref() }
-    pub fn set_catalog(&mut self, catalog: Option<Result<Catalog,GeneratingWidgetError>>) {
-        if let Some(Ok(catalog)) = &catalog {
-               tracing::info!("Total media items while creating view: {}", catalog.iter_all().count()); } 
-        else if let Some(Err(e)) = &catalog {
-               tracing::info!("[CatalogView::set_catalog] Tried setting catalog to Some(Err(_)). Error: {e:?}"); }
-        else { tracing::info!("Creating `CatalogView` with no catalog"); }
+    pub fn get_catalog(&self) -> Option<&Catalog>   { self.catalog.as_ref() }
+    pub fn set_catalog(&mut self, catalog: Option<Catalog>) {
         self.catalog = catalog;
-        self.update_media_list();
+        if let Some(ref catalog) = self.catalog {
+            tracing::info!("Total media items while creating view: {}", catalog.iter_all().count());
+            self.update_media_list();
+            self.stage_api_calls();
+        }
+        else { tracing::info!("Creating `CatalogView` with no catalog"); }
     }
 
     pub fn generate_catalog(&mut self) {
-        let generator = GeneratingWidget::new();
+        let generator = GeneratingWidget::new(self.config.clone());
         // self.info_widget = ActiveInfoWidget::GeneratingCatalog(generator);
         self.info_widget = Some(generator);
     }
@@ -173,7 +196,15 @@ impl CatalogView {
         match &result.status {
             QueryStatus::Success(response) => tracing::info!(
                 "[Success] Result: src -> {:?}",
-                format!("{} ({}) [tmdbid-{}]", response.title, response.year, response.tmdb)),
+                format!(
+                    "{} ({}) [tmdbid-{}]",
+                    response.title,
+                    response.year,
+                    match &response.tmdb {
+                        ApiSpecificMediaId::TMDB(id) => id,
+                        ApiSpecificMediaId::OMDB(id) => id,
+                    }
+                )),
             QueryStatus::Failed(query_error) => tracing::error!(
                 "[Failure] Failed to query API: {:?}",
                 query_error),
@@ -275,7 +306,7 @@ impl Renderable for &mut CatalogView {
             crossterm::event::KeyCode::Char('l') => {}
             crossterm::event::KeyCode::Char('h') => {}
             crossterm::event::KeyCode::Char('p') => {
-                if let Some(Ok(catalog)) = &self.catalog {
+                if let Some(ref catalog) = self.catalog {
                     tracing::info!("Sending API requests");
                     self.api_manifest.send();
                     let mut lock = self.api_manifest.try_lock().unwrap();

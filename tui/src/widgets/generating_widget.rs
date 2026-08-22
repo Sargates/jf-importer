@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::sync::Arc;
 
 use ratatui::{
     buffer::Buffer, 
@@ -9,30 +10,31 @@ use ratatui::{
     *
 };
 
-use tokio::sync::watch;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::select;
 
-use jf_import_library::api::{client::QueryStatus, error::QueryError};
-use jf_import_library::media::{
-    Catalog, CatalogBuilder, CatalogBuildError,
-};
-use jf_import_library::media;
-use jf_import_library::config::*;
+use jfi::api::{client::QueryStatus, error::QueryError};
+use jfi::catalog::{ Catalog, CatalogBuilder, CatalogBuildError, };
+use jfi::media;
+use jfi::config::*;
 
 use crate::widgets::{BrailleLoadingIcon, Renderable};
 
 #[derive(Debug)]
 pub enum GeneratingWidgetError {
-    PanicOnBuilderThread(tokio::task::JoinError),
+    // PanicOnBuilderThread(tokio::task::JoinError),
     CatalogGenError(CatalogBuildError),
     Timeout,
-    ManuallyAborted(tokio::task::JoinError),
-    RecvError(watch::error::RecvError)
+    ChannelClosed,
+    // ManuallyAborted(tokio::task::JoinError),
+    // RecvError(mpsc::error::TryRecvError),
+    PollAfterCompletion,
 }
 
 pub struct GeneratingWidget {
-    thread_handle: JoinHandle<Result<Catalog, CatalogBuildError>>,
+    // thread_handle: JoinHandle<Result<Catalog, CatalogBuildError>>,
+    build_thread_rx: mpsc::Receiver<Result<Catalog, CatalogBuildError>>,
     completed: Option<Result<Catalog, GeneratingWidgetError>>,
 
     block: Option<Block<'static>>,
@@ -40,23 +42,28 @@ pub struct GeneratingWidget {
     display: RefCell<MessageDisplay>
 }
 impl GeneratingWidget {
-    pub fn new() -> Self {
-        let builder = CatalogBuilder::new(CONFIG.clone());
-        let mut display = MessageDisplay::new(builder.subscribe());
+    pub fn new(config: Arc<Config>) -> Self {
+        let (status_tx, status_rx) = mpsc::channel::<Result<String, CatalogBuildError>>(1000);
+        let mut builder = CatalogBuilder::new(config, Some(status_tx));
+        let mut display = MessageDisplay::new(status_rx);
 
-        // this subscriber needs to be properly handled after we call `builder.build`
-        let thread_handle = tokio::task::spawn_blocking(move || {
+        // this should just be moved to a channel.
+        // it should `move` the `tx` channel and we should store the `rx` channel
+        // `std::sync::oneshot` is nightly-only and experiemental, so just mimic with a normal mpsc
+        let (tx, rx) = mpsc::channel::<Result<Catalog, CatalogBuildError>>(1);
+        tokio::task::spawn(async move {
             tracing::info!("Creating GeneratingView");
-            let res = builder.build();
+            let res = builder.build().await;
             match &res {
                 Ok(_)  => tracing::info!("[GenerationThread] Successfully generated catalog"),
-                Err(e) => tracing::info!("[GenerationThread] Failed to generate catalog: {e:?}"),
+                Err(e) => tracing::error!("[GenerationThread] Failed to generate catalog: {e:?}"),
             }
-            res
+            tx.send(res).await;
+            tracing::info!("[GenerationThread] Sending result in channel");
         });
 
         Self {
-            thread_handle,
+            build_thread_rx: rx,
             completed: None,
             block: None,
             display: RefCell::new(display)
@@ -65,19 +72,22 @@ impl GeneratingWidget {
     pub async fn poll(&mut self) -> Result<(), GeneratingWidgetError> {
         let mut borrow_mut = self.display.borrow_mut();
         select! {
-            res = &mut self.thread_handle => {
+            res = self.build_thread_rx.recv(), if self.completed.is_none() => {
+                tracing::info!("Worker Thread complete");
                 match res {
-                    Ok(owned) => {
-                        tracing::info!("Finished!!!");
-                        self.completed = Some(owned.map_err(|e| GeneratingWidgetError::CatalogGenError(e)));
+                    Some(res) => {
+                        tracing::info!("Channel was not closed. Extracting result from channel.");
+                        self.completed = Some(res.map_err(|e| GeneratingWidgetError::CatalogGenError(e)));
                     }
-                    Err(e) => {
-                        tracing::error!("Failed to join thread while generating media catalog! Error: {:?}", e);
-                        if e.is_cancelled() {
-                            self.completed = Some(Err(GeneratingWidgetError::ManuallyAborted(e)))
-                        } else {
-                            self.completed = Some(Err(GeneratingWidgetError::PanicOnBuilderThread(e)))
-                        }
+                    None => {
+                        // tracing::error!("Failed to join thread while generating media catalog! Error: {:?}", e);
+                        // if e.is_cancelled() {
+                        //     self.completed = Some(Err(GeneratingWidgetError::ManuallyAborted(e)))
+                        // } else {
+                        //     self.completed = Some(Err(GeneratingWidgetError::PanicOnBuilderThread(e)))
+                        // }
+                        tracing::info!("Channel was closed before catalog could be extracted. (terminated by user?)");
+                        self.completed = Some(Err(GeneratingWidgetError::ChannelClosed))
                     }
                 }
             }
@@ -102,59 +112,58 @@ impl GeneratingWidget {
         ;
         self.block = Some(block);
     }
-    pub fn is_complete(&self) -> bool { self.thread_handle.is_finished() && self.completed.is_some() }
+    /// doesn't necessarily mean that the builder completed with success
+    pub fn is_complete(&self) -> bool { self.completed.is_some() }
+    /// Take the completed result from the worker thread.
     pub fn take(&mut self) -> Option<Result<Catalog,GeneratingWidgetError>> { self.completed.take() }
-}
-impl Drop for GeneratingWidget {
-    fn drop(&mut self) {
-        tracing::error!("Dropping GeneratingWidget");
-        self.thread_handle.abort();
-    }
+    pub fn received_error(&self) -> bool     { self.display.borrow().received_error() }
 }
 
 struct MessageDisplay {
     pub inner: Option<Buffer>,
     pub last: (Option<String>, Option<String>),
-    pub subscriber: watch::Receiver<String>,
+    pub subscriber: mpsc::Receiver<Result<String, CatalogBuildError>>,
+    has_received_error: bool
 }
 impl MessageDisplay {
-    pub fn new(subscriber: watch::Receiver<String>) -> Self {
+    pub fn new(subscriber: mpsc::Receiver<Result<String, CatalogBuildError>>) -> Self {
         Self {
             inner: None,
             last: (None, None),
             subscriber,
+            has_received_error: false,
         }
     }
-    pub fn generate(&mut self, rect: Rect)
-        { self.inner = Some(Buffer::empty(rect)) }
-    pub fn is_unset(&self) -> bool
-        { self.inner.is_none() }
-    pub fn set(&mut self, inner: Buffer)
-        { self.inner = Some(inner) }
-    pub fn take(&mut self) -> Option<Buffer>
-        { self.inner.take() }
+    pub fn generate(&mut self, rect: Rect)   { self.inner = Some(Buffer::empty(rect)) }
+    pub fn is_unset(&self) -> bool           { self.inner.is_none() }
+    pub fn set(&mut self, inner: Buffer)     { self.inner = Some(inner) }
+    pub fn take(&mut self) -> Option<Buffer> { self.inner.take() }
     pub async fn poll(&mut self) -> Result<(), GeneratingWidgetError> {
         select! {
-            res = self.subscriber.changed() => {
+            res = self.subscriber.recv() => {
+                if res.is_none() {
+                    return Err(GeneratingWidgetError::PollAfterCompletion);
+                }
+                let res = res.unwrap();
                 match res {
-                    Ok(()) => {
-                        let message = self.subscriber.borrow_and_update().to_string();
-                        tracing::info!("[] Message Received from : {}", message);
-                        self.last=(self.last.1.clone(), Some(message)); 
-                    }
+                    Ok(message) => {
+                        tracing::info!("[MessageDisplay] Message Received from : {}", message);
+                        self.last=(self.last.1.clone(), Some(message.clone())); 
+                    },
                     Err(e) => {
-                        tracing::info!("[] Error when receiving from channel: {:?}", e);
-                        Err(e).map_err(|e| GeneratingWidgetError::RecvError(e))?;
-                    }
+                        tracing::warn!("[MessageDisplay] Received error from sender: {:?}", e);
+                        self.has_received_error = true;
+                        self.last=(self.last.1.clone(), Some(format!("Received error from sender: {:?}", e))); 
+                    },
                 }
             }
             _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
                 tracing::info!("Timed out waiting for GeneratingView subscriber!!");
-                Err(GeneratingWidgetError::Timeout)?
             }
         }
         Ok(())
     }
+    pub fn received_error(&self) -> bool     { self.has_received_error }
 }
 
 impl WidgetRef for GeneratingWidget {
