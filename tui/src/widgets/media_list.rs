@@ -31,73 +31,66 @@ pub struct MediaListItem {
 #[derive(Default)]
 pub struct MediaList {
     inner: Vec<MediaListItem>,
-    state: RefCell<ListState>,
-    rect:  RefCell<Option<Rect>>,
+    state: ListState,
+    rect:  Option<Rect>,
 }
 impl MediaList {
     pub fn update_list(&mut self, new: Vec<MediaListItem>) {
-
         // update internal state
-        let mut borrow = self.state.borrow_mut();
-        let opt = borrow.selected();
-        if let Some(i) = opt && i < new.len() { borrow.select(Some(i)); }
+        // let mut borrow = self.state.borrow_mut();
+        let opt = self.state.selected();
+        if let Some(i) = opt && i < new.len() { self.state.select(Some(i)); }
         else
-        if let None = opt && new.len() > 0 { borrow.select(Some(0)); }
+        if let None = opt && new.len() > 0 { self.state.select(Some(0)); }
 
         self.inner = new;
     }
-    // Get the selected MediaItem in the list. Return None if anything goes wrong.
+
+    /// Get the selected MediaItem in the list. Return None if anything goes wrong.
     pub fn with_state(mut self, state: ListState) -> Self {
-        *self.state.borrow_mut() = state;
+        self.state = state;
         self
     }
     pub fn select_next(&mut self) {
-        let mut lock = self.state.borrow_mut();
-        match lock.selected() {
-            Some(index) if index < self.inner.len()-1 => { lock.select_next(); }
-            None => { lock.select(Some(0)); }
+        // let mut lock = self.state.borrow_mut();
+        match self.state.selected() {
+            Some(index) if index < self.inner.len()-1 => { self.state.select_next(); }
+            None => { self.state.select(Some(0)); }
             Some(_) => {}
         }
     }
     pub fn select_previous(&mut self) {
-        let mut lock = self.state.borrow_mut();
-        match lock.selected() {
-            Some(index) if index >= 1 => { lock.select_previous(); }
-            None => { lock.select(Some(0)); }
+        match self.state.selected() {
+            Some(index) if index >= 1 => { self.state.select_previous(); }
+            None => { self.state.select(Some(0)); }
             Some(_) => {}
         }
     }
     pub fn half_down(&mut self) {
-        let mut lock = self.state.borrow_mut();
-        let mut lock2 = self.rect.borrow_mut();
-        let height = lock2.map(|r| r.as_size().height).unwrap_or(0);
-        match lock.selected() {
-            Some(index) if index < self.inner.len()-1 => { lock.scroll_down_by(height/2); }
-            None => { lock.select(Some((height/2) as usize)); }
+        let height = self.rect.map(|r| r.as_size().height).unwrap_or(0);
+        match self.state.selected() {
+            Some(index) if index < self.inner.len()-1 => { self.state.scroll_down_by(height/2); }
+            None => { self.state.select(Some((height/2) as usize)); }
             Some(_) => {}
         }
     }
     pub fn half_up(&mut self) {
-        let mut lock = self.state.borrow_mut();
-        let mut lock2 = self.rect.borrow_mut();
-        let height = lock2.map(|r| r.as_size().height).unwrap_or(0);
-        match lock.selected() {
-            Some(index) if index >= 1 => { lock.scroll_up_by(height/2); }
-            None => { lock.select(Some((height/2) as usize)); }
+        let height = self.rect.map(|r| r.as_size().height).unwrap_or(0);
+        match self.state.selected() {
+            Some(index) if index >= 1 => { self.state.scroll_up_by(height/2); }
+            None => { self.state.select(Some((height/2) as usize)); }
             Some(_) => {}
         }
     }
     pub fn goto_top(&mut self) {
-        let mut lock = self.state.borrow_mut();
-        lock.select(Some(0));
+        self.state.select(Some(0));
     }
     pub fn goto_bottom(&mut self) {
-        let mut lock = self.state.borrow_mut();
-        lock.select(Some(self.inner.len()));
+        self.state.select(Some(self.inner.len()));
     }
 
     pub fn get_selected(&self) -> Option<MediaItem> {
-        self.state.try_borrow().ok()?
+        self.state
             .selected()
             .map(|i| self.inner.get(i).map(|item| item.inner.clone()))
             .flatten()
@@ -133,8 +126,6 @@ impl Widget for &mut MediaList {
                 Line::from(label).right_aligned().into()
             })
             .collect();
-        // let statuses: Vec<ListItem> = Vec::new();
-        // tracing::info!("{:#?}", items);
 
         let block = Block::new()
             // .borders(Borders::ALL)
@@ -149,8 +140,7 @@ impl Widget for &mut MediaList {
             .title(" Media Item ".add_modifier(Modifier::REVERSED).bold());
         let dummy = Paragraph::new("")
             .block(left_title);
-        let mut lock = self.rect.borrow_mut();
-        *lock = Some(area.clone());
+        self.rect = Some(area.clone());
         Widget::render(dummy, area, buf);
         let right_title = block.clone()
             .title_alignment(Alignment::Right)
@@ -164,10 +154,9 @@ impl Widget for &mut MediaList {
         ;
 
         let names = list.items(items);
-        let mut lock = self.state.borrow_mut();
-        StatefulWidget::render(&names, area, buf, &mut lock);
+        StatefulWidget::render(&names, area, buf, &mut self.state);
         let statuses = names.items(statuses);
-        StatefulWidget::render(&statuses, area, buf, &mut lock);
+        StatefulWidget::render(&statuses, area, buf, &mut self.state);
     }
 }
 

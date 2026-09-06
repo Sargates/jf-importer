@@ -298,7 +298,9 @@ impl Renderable for &mut CatalogView {
         let info_block = styled_block.clone()
             .title_top(Line::from(" Information ".add_modifier(Modifier::REVERSED).bold()).right_aligned())
         ;
-        Paragraph::new("").block(info_block.clone()).render(user_and_media_info, frame.buffer_mut());
+        Paragraph::new("")
+            .block(info_block.clone())
+            .render(user_and_media_info, frame.buffer_mut());
 
         // TODO: clean up this method
         //       `info_widget` should be an Enum of `Generator` and `MediaInfo`
@@ -311,8 +313,8 @@ impl Renderable for &mut CatalogView {
             },
             InfoWidget::MediaInfo => {
                 if let Some(ref mut catalog) = self.catalog &&
-                let Ok(lock) = catalog.try_lock_manifest() &&
-                let Some(item) = self.media_list.get_selected()
+                   let Ok(lock) = catalog.try_lock_manifest() &&
+                   let Some(item) = self.media_list.get_selected()
                 {
                     // transition rect inner of border
                     let user_and_media_info = map(user_and_media_info);
