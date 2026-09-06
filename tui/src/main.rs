@@ -14,6 +14,7 @@ mod app;
 mod widgets;
 mod utils;
 mod logging;
+mod ffprobe;
 
 use app::App;
 use logging::*;

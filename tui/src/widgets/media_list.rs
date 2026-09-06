@@ -1,6 +1,9 @@
-use std::{cell::RefCell, vec};
+use std::collections::HashMap;
+use std::{cell::RefCell};
+use std::sync::Arc;
 use std::rc::Rc;
 
+use jfi::media::ffprobe::*;
 use ratatui::{
     *,
     layout::*,
@@ -17,32 +20,34 @@ use jfi::media::MediaItem;
 use jfi::api::client::{QueryResponse, QueryStatus};
 
 use crate::widgets::BRAILLE;
+use crate::ffprobe::*;
 
 
 pub struct MediaListItem {
     pub inner: MediaItem,
-    pub status: Rc<QueryStatus>,
+    pub status: Arc<QueryStatus>,
 }
 
 #[derive(Default)]
 pub struct MediaList {
     inner: Vec<MediaListItem>,
     state: RefCell<ListState>,
+    rect:  RefCell<Option<Rect>>,
 }
 impl MediaList {
-    pub fn update(&mut self, new: Vec<MediaListItem>) {
-        let mut state = ListState::default();
-        if new.len() > 0 { state = state.with_selected(Some(0)); } // autoselect first element
+    pub fn update_list(&mut self, new: Vec<MediaListItem>) {
+
+        // update internal state
         let mut borrow = self.state.borrow_mut();
         let opt = borrow.selected();
-        if let Some(i) = opt && i < new.len() {
-            borrow.select(Some(i)); 
-        } else if let None = opt && new.len() > 0 {
-            borrow.select(Some(0)); 
-        }
+        if let Some(i) = opt && i < new.len() { borrow.select(Some(i)); }
+        else
+        if let None = opt && new.len() > 0 { borrow.select(Some(0)); }
+
         self.inner = new;
     }
-    pub fn set_state(mut self, state: ListState) -> Self {
+    // Get the selected MediaItem in the list. Return None if anything goes wrong.
+    pub fn with_state(mut self, state: ListState) -> Self {
         *self.state.borrow_mut() = state;
         self
     }
@@ -62,12 +67,48 @@ impl MediaList {
             Some(_) => {}
         }
     }
+    pub fn half_down(&mut self) {
+        let mut lock = self.state.borrow_mut();
+        let mut lock2 = self.rect.borrow_mut();
+        let height = lock2.map(|r| r.as_size().height).unwrap_or(0);
+        match lock.selected() {
+            Some(index) if index < self.inner.len()-1 => { lock.scroll_down_by(height/2); }
+            None => { lock.select(Some((height/2) as usize)); }
+            Some(_) => {}
+        }
+    }
+    pub fn half_up(&mut self) {
+        let mut lock = self.state.borrow_mut();
+        let mut lock2 = self.rect.borrow_mut();
+        let height = lock2.map(|r| r.as_size().height).unwrap_or(0);
+        match lock.selected() {
+            Some(index) if index >= 1 => { lock.scroll_up_by(height/2); }
+            None => { lock.select(Some((height/2) as usize)); }
+            Some(_) => {}
+        }
+    }
+    pub fn goto_top(&mut self) {
+        let mut lock = self.state.borrow_mut();
+        lock.select(Some(0));
+    }
+    pub fn goto_bottom(&mut self) {
+        let mut lock = self.state.borrow_mut();
+        lock.select(Some(self.inner.len()));
+    }
+
+    pub fn get_selected(&self) -> Option<MediaItem> {
+        self.state.try_borrow().ok()?
+            .selected()
+            .map(|i| self.inner.get(i).map(|item| item.inner.clone()))
+            .flatten()
+    }
 }
 
-impl Widget for &MediaList {
+impl Widget for &mut MediaList {
     fn render(self, area: Rect, buf: &mut Buffer)
     where
-        Self: Sized {
+        Self: Sized
+    {
         let items: Vec<ListItem> = self.inner
             .iter()
             .map(|item| {
@@ -92,11 +133,14 @@ impl Widget for &MediaList {
                 Line::from(label).right_aligned().into()
             })
             .collect();
+        // let statuses: Vec<ListItem> = Vec::new();
+        // tracing::info!("{:#?}", items);
 
         let block = Block::new()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .merge_borders(symbols::merge::MergeStrategy::Fuzzy);
+            // .borders(Borders::ALL)
+            // .border_type(BorderType::Rounded)
+            // .merge_borders(symbols::merge::MergeStrategy::Fuzzy)
+        ;
 
         // TODO: make this styling global.
         // Something similar to this: https://github.com/LucasPickering/slumber/blob/master/crates/tui/src/view/styles.rs
@@ -105,6 +149,8 @@ impl Widget for &MediaList {
             .title(" Media Item ".add_modifier(Modifier::REVERSED).bold());
         let dummy = Paragraph::new("")
             .block(left_title);
+        let mut lock = self.rect.borrow_mut();
+        *lock = Some(area.clone());
         Widget::render(dummy, area, buf);
         let right_title = block.clone()
             .title_alignment(Alignment::Right)

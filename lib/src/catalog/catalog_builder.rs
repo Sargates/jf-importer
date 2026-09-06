@@ -11,6 +11,7 @@ use ignore::*;
 
 use tokio::sync::{Mutex, mpsc};
 
+use crate::api::client::ApiClient;
 use crate::catalog::*;
 use crate::media::{
     Episode,
@@ -22,7 +23,7 @@ use crate::media::{
 
 use crate::api::{
     calls::ApiManifest,
-    client::{QueryResponse, QueryStatus}
+    client::*
 };
 use crate::config::{Config,Secrets,SECRETS};
 
@@ -41,11 +42,20 @@ impl From<regex::Error> for CatalogBuildError {
 //     fn from(value: mpsc::error::SendError<String>) -> Self { Self::StatusReportSendError(value) }
 // }
 
+/// Raw intermediate type for catalog builder
+enum RawCatalogItem {
+    Show(String),
+    Movie(String),
+    Episode(String),
+}
+
 pub struct CatalogBuilder {
     config: Arc<Config>,
     status_tx: Option<mpsc::Sender<Result<String, CatalogBuildError>>>,
-    // receiver: Option<mpsc::Receiver<Result<String, CatalogBuildError>>>,
 
+    client: Option<Arc<dyn ApiClient + Sync + Send>>,
+
+    // items: Vec<RawCatalogItem>,
     movies: Vec<Arc<Movie>>,
     shows: Vec<Arc<Show>>,
     episodes: Vec<Arc<Episode>>,
@@ -65,10 +75,9 @@ enum ParseAs {
 
 impl CatalogBuilder {
     pub fn new(config: Arc<Config>, status_tx: Option<mpsc::Sender<Result<String, CatalogBuildError>>>) -> Self {
-        // let (tx, rx) = mpsc::channel::<Result<String, CatalogBuildError>>(1000);
-
         Self {
             config,
+            client: None,
             status_tx,
             movies: Vec::new(),
             shows: Vec::new(),
@@ -77,6 +86,14 @@ impl CatalogBuilder {
         }
     }
 
+    pub fn with_client(mut self, client: Option<Arc<dyn ApiClient+Sync+Send>>) -> CatalogBuilder { self.client = client; self }
+    pub fn set_client(&mut self, client: Option<Arc<dyn ApiClient+Sync+Send>>) { self.client = client; }
+
+    // TODO: Change this to use an intermediate struct for each item.
+    // Do a full walk while pushing entries to an enum. Then, split each entry
+    // type into its own vector while collecting repeats into a single
+    // `MediaItem` (would require changing the definition of `MediaItem`) as a
+    // structure of arrays.
     pub async fn build(mut self) -> Result<Catalog, CatalogBuildError> {
         let config = self.config.clone();
         let ingest_movies_dir = &config.IngestMovieDir;
@@ -140,6 +157,8 @@ impl CatalogBuilder {
             shows: self.shows,
             episodes: self.episodes,
             failures: self.fails,
+            api_client: self.client,
+            api_manifest: Mutex::new(ApiManifest::default()),
         })
     }
 
@@ -190,6 +209,11 @@ impl CatalogBuilder {
             return;
         }
 
+        // self.items.push(match parse {
+        //     ParseAs::Movie => self.items.push(RawCatalogItem::Movie(dir_entry)),
+        //     ParseAs::Show => todo!(),
+        // })
+
         // Map a `Result<Movie, MediaCreateError>` or `Result<Show, MediaCreateError>` to a wrapped
         // `Result<MediaItem, MediaCreateError>` to allow propagating errors while using typing system
         let res: Result<MediaItem, MediaCreateError> = match parse {
@@ -215,12 +239,6 @@ impl CatalogBuilder {
             MediaItem::Show(show) => self.shows.push(show),
             MediaItem::Episode(ep) => todo!(),
         }
-    }
 
-    // pub fn subscribe(&mut self) -> mpsc::Receiver<Result<String, CatalogBuildError>> {
-    //     if self.receiver.is_none() {
-    //         tracing::error!("Tried to subscribe to catalog more than once! Panicking");
-    //     }
-    //     self.receiver.take().unwrap()
-    // }
+    }
 }

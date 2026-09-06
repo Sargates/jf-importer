@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::{io, time::Duration};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -78,8 +79,7 @@ impl App {
             match <JfiConfig as TryInto<jfi::Config>>::try_into(cfg) {
                 Ok(c) => {
                     let cfg = Arc::new(c);
-                    (AppState::CatalogView(CatalogView::new(cfg.clone())
-                        .with_client(Arc::new(TMDBClient::new()))), Some(cfg))
+                    (AppState::CatalogView(CatalogView::new(cfg.clone())), Some(cfg))
                 }
                 Err(e) => {
                     tracing::info!("Config loaded from file is not a valid library configuration. Error: {:?}", e);
@@ -101,7 +101,8 @@ impl App {
             exit,
         }
     }
-    pub async fn run(&mut self) -> io::Result<()> {
+
+    pub async fn run(&mut self) -> Result<(), Box<dyn Error>> {
         tracing::info!("Starting!!");
         
         // `ratatui::run` expects a synchronous closure, this is just ripped from `ratatui::run` and
@@ -140,6 +141,7 @@ impl App {
 
         Ok(())
     }
+
     async fn update(&mut self) -> Result<(), AppUpdateError> {
         match &mut self.state {
             AppState::CatalogView(view) => {
@@ -158,6 +160,7 @@ impl App {
         };
         Ok(())
     }
+
     fn draw(&mut self, frame: &mut Frame) {
         match &mut self.state {
             AppState::CatalogView(view)       => { view.render(frame) },
@@ -184,47 +187,7 @@ impl App {
             }
         }
     }
-    // fn default_background(&self, frame: &mut Frame) {
-    //     let area = frame.area();
-    //     let title = Line::from(" Counter App Tutorial ".bold());
-    //     let instructions = Line::from(vec![
-    //         " ".into(),
-    //         "Decrement ".into(),
-    //         format!("<{}>",KeyCode::Left).blue().bold(),
-    //         " Increment ".into(),
-    //         format!("<{}>",KeyCode::Right).blue().bold(),
-    //         " Quit ".into(),
-    //         format!("<{}>",KeyCode::Char('q')).blue().bold(),
-    //         " Load Catalog ".into(),
-    //         format!("<{}>",KeyCode::Char('p')).blue().bold(),
-    //         " ".into(),
-    //     ]);
-    //
-    //     let layout = Layout::vertical([Constraint::Percentage(50); 2]);
-    //     let [top, bottom] = area.layout(&layout);
-    //     frame.render_widget(
-    //         Paragraph::new("outer 0")
-    //             .block(Block::new().bold().fg(Color::Red).borders(Borders::ALL).title_top(title.clone()).title_bottom(instructions.clone().centered())),
-    //         top
-    //     );
-    //     frame.render_widget(
-    //         Paragraph::new("outer 1")
-    //             .block(Block::new().bold().fg(Color::Yellow).borders(Borders::ALL).title_top(title.clone()).title_bottom(instructions.clone().centered())),
-    //         bottom
-    //     );
-    //     if CONFIG.load_error != SecretsLoadError::Success {
-    //         let popup_block = Block::bordered().title("Failed to load configuration!");
-    //         let float = area.centered(Constraint::Percentage(60), Constraint::Percentage(20));
-    //
-    //         Clear.render(float, frame.buffer_mut());
-    //         let paragraph = Paragraph::new(
-    //             format!("I failed to load your configuration and had to revert to the default.\nError: {:?}\n{:#?}", CONFIG.load_error, CONFIG.clone()))
-    //             .bold()
-    //             .fg(Color::Red)
-    //             .block(popup_block);
-    //         frame.render_widget(paragraph, float);
-    //     }
-    // }
+
     fn handle_events(&mut self) -> io::Result<()> {
         // switch this to crossterm::event::poll
         if event::poll(Duration::from_millis(0))? {
@@ -240,7 +203,9 @@ impl App {
 
         Ok(())
     }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        tracing::info!("Pressed: {:?}", key_event.code);
         match key_event.code {
             KeyCode::Char('q') => {
                 // if CONFIG.load_error != SecretsLoadError::Success {
@@ -262,7 +227,7 @@ impl App {
                     //     }
                     // }
                     // AppState::GeneratingCatalog(view) => {}, // no user input
-                    AppState::CatalogView(view) => view.handle_input(key_event.code),
+                    AppState::CatalogView(view) => view.handle_input(key_event),
                     AppState::RevertedToDefaultConfig => {},
                     AppState::InvalidConfigSupplied => {},
                 }

@@ -43,4 +43,6 @@ pub use config::*;
 pub mod media;
 pub mod api;
 pub mod catalog;
+mod omnisync_task;
+pub use omnisync_task::*;
 

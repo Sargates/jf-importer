@@ -1,6 +1,7 @@
 /target
 .env
 .data
+.gdb_history
 
 ignore/
 

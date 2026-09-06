@@ -14,56 +14,55 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::select;
 
-use jfi::api::{client::QueryStatus, error::QueryError};
+use jfi::api::{client::*, error::QueryError};
 use jfi::catalog::{ Catalog, CatalogBuilder, CatalogBuildError, };
 use jfi::media;
 use jfi::config::*;
+use jfi::OmnisyncTask;
 
 use crate::widgets::{BrailleLoadingIcon, Renderable};
 
 #[derive(Debug)]
 pub enum GeneratingWidgetError {
-    // PanicOnBuilderThread(tokio::task::JoinError),
     CatalogGenError(CatalogBuildError),
     Timeout,
     ChannelClosed,
+
+    //* there's no way to detect these since we're using channels now
+    // PanicOnBuilderThread(tokio::task::JoinError),
     // ManuallyAborted(tokio::task::JoinError),
     // RecvError(mpsc::error::TryRecvError),
     PollAfterCompletion,
 }
 
 pub struct GeneratingWidget {
-    // thread_handle: JoinHandle<Result<Catalog, CatalogBuildError>>,
-    build_thread_rx: mpsc::Receiver<Result<Catalog, CatalogBuildError>>,
+    task: OmnisyncTask<Result<Catalog, CatalogBuildError>>,
     completed: Option<Result<Catalog, GeneratingWidgetError>>,
 
     block: Option<Block<'static>>,
-
     display: RefCell<MessageDisplay>
 }
 impl GeneratingWidget {
     pub fn new(config: Arc<Config>) -> Self {
         let (status_tx, status_rx) = mpsc::channel::<Result<String, CatalogBuildError>>(1000);
-        let mut builder = CatalogBuilder::new(config, Some(status_tx));
+        let mut builder = CatalogBuilder::new(config, Some(status_tx))
+            .with_client(Some(Arc::new(TMDBClient::new())));
         let mut display = MessageDisplay::new(status_rx);
 
-        // this should just be moved to a channel.
-        // it should `move` the `tx` channel and we should store the `rx` channel
-        // `std::sync::oneshot` is nightly-only and experiemental, so just mimic with a normal mpsc
         let (tx, rx) = mpsc::channel::<Result<Catalog, CatalogBuildError>>(1);
-        tokio::task::spawn(async move {
+        let task = OmnisyncTask::new(async move {
             tracing::info!("Creating GeneratingView");
             let res = builder.build().await;
             match &res {
                 Ok(_)  => tracing::info!("[GenerationThread] Successfully generated catalog"),
                 Err(e) => tracing::error!("[GenerationThread] Failed to generate catalog: {e:?}"),
             }
-            tx.send(res).await;
             tracing::info!("[GenerationThread] Sending result in channel");
+            res
         });
 
         Self {
-            build_thread_rx: rx,
+            task,
             completed: None,
             block: None,
             display: RefCell::new(display)
@@ -72,25 +71,6 @@ impl GeneratingWidget {
     pub async fn poll(&mut self) -> Result<(), GeneratingWidgetError> {
         let mut borrow_mut = self.display.borrow_mut();
         select! {
-            res = self.build_thread_rx.recv(), if self.completed.is_none() => {
-                tracing::info!("Worker Thread complete");
-                match res {
-                    Some(res) => {
-                        tracing::info!("Channel was not closed. Extracting result from channel.");
-                        self.completed = Some(res.map_err(|e| GeneratingWidgetError::CatalogGenError(e)));
-                    }
-                    None => {
-                        // tracing::error!("Failed to join thread while generating media catalog! Error: {:?}", e);
-                        // if e.is_cancelled() {
-                        //     self.completed = Some(Err(GeneratingWidgetError::ManuallyAborted(e)))
-                        // } else {
-                        //     self.completed = Some(Err(GeneratingWidgetError::PanicOnBuilderThread(e)))
-                        // }
-                        tracing::info!("Channel was closed before catalog could be extracted. (terminated by user?)");
-                        self.completed = Some(Err(GeneratingWidgetError::ChannelClosed))
-                    }
-                }
-            }
             res = borrow_mut.poll() => {
                 match res {
                     Ok(_) => {}
@@ -112,25 +92,29 @@ impl GeneratingWidget {
         ;
         self.block = Some(block);
     }
-    /// doesn't necessarily mean that the builder completed with success
-    pub fn is_complete(&self) -> bool { self.completed.is_some() }
+
+    pub fn is_some(&mut self) -> bool { self.task.is_some() }
+
     /// Take the completed result from the worker thread.
-    pub fn take(&mut self) -> Option<Result<Catalog,GeneratingWidgetError>> { self.completed.take() }
+    pub fn take(&mut self) -> Option<Result<Catalog,GeneratingWidgetError>> {
+        self.task.take()
+            .map(|o| o.map_err(GeneratingWidgetError::CatalogGenError))
+    }
     pub fn received_error(&self) -> bool     { self.display.borrow().received_error() }
 }
 
 struct MessageDisplay {
     pub inner: Option<Buffer>,
     pub last: (Option<String>, Option<String>),
-    pub subscriber: mpsc::Receiver<Result<String, CatalogBuildError>>,
+    pub rx: mpsc::Receiver<Result<String, CatalogBuildError>>,
     has_received_error: bool
 }
 impl MessageDisplay {
-    pub fn new(subscriber: mpsc::Receiver<Result<String, CatalogBuildError>>) -> Self {
+    pub fn new(rx: mpsc::Receiver<Result<String, CatalogBuildError>>) -> Self {
         Self {
             inner: None,
             last: (None, None),
-            subscriber,
+            rx,
             has_received_error: false,
         }
     }
@@ -140,7 +124,7 @@ impl MessageDisplay {
     pub fn take(&mut self) -> Option<Buffer> { self.inner.take() }
     pub async fn poll(&mut self) -> Result<(), GeneratingWidgetError> {
         select! {
-            res = self.subscriber.recv() => {
+            res = self.rx.recv() => {
                 if res.is_none() {
                     return Err(GeneratingWidgetError::PollAfterCompletion);
                 }

@@ -1,13 +1,17 @@
 use std::rc::Rc;
+use std::collections::HashMap;
 use std::slice::Iter;
 use std::sync::Arc;
 
 use itertools::Itertools;
 
+use futures::future;
+use tokio::sync::{Mutex, MutexGuard, TryLockError};
+
 use crate::media::*;
 use crate::api::{
-    calls::ApiManifest,
-    client::{QueryResponse, QueryStatus}
+    calls::*,
+    client::*
 };
 use crate::catalog::CatalogFailure;
 use crate::config::{Config,Secrets,SECRETS};
@@ -19,7 +23,8 @@ pub struct Catalog {
     pub(crate) shows: Vec<Arc<Show>>,
     pub(crate) episodes: Vec<Arc<Episode>>,
     pub(crate) failures: Vec<CatalogFailure>,
-    // pub(crate) api_manifest: Option<ApiManifest>,
+    pub(crate) api_manifest: Mutex<ApiManifest>,
+    pub(crate) api_client: Option<Arc<dyn ApiClient + Sync + Send>>,
 }
 
 impl Catalog {
@@ -27,10 +32,12 @@ impl Catalog {
     pub fn iter_movies(&self) -> impl Iterator<Item = Arc<Movie>> {
         self.movies.iter().map(|m| m.clone())
     }
+
     /// Return an iterator of all `Show`s
     pub fn iter_shows(&self) -> impl Iterator<Item = Arc<Show>> {
         self.shows.iter().map(|s| s.clone())
     }
+
     /// Return an iterator of all `Movie` and `Show` objects
     pub fn iter_all(&self) -> impl Iterator<Item = MediaItem> {
         let movies = self.movies.iter()
@@ -44,12 +51,7 @@ impl Catalog {
     ///
     /// We sort Movies independently and then Shows independently 
     /// and then concatenated to preserve contiguity. 
-    ///
-    /// Can be passed a manifest to base the sort on. If a manifest 
-    /// is passed, but the media item isn't contained within it, 
-    /// this method will try to sort alphabetically by search_term 
-    /// as a fall back.
-    pub fn iter_all_sorted(&self, manifest: Option<&ApiManifest>) -> impl Iterator<Item = MediaItem> {
+    pub fn iter_all_sorted(&self) -> impl Iterator<Item = MediaItem> {
         // This is actually so fucking concise compared to the first draft of this 
         // function. Rust's typing system can be very annoying, but so beautiful 
         // sometimes.
@@ -59,20 +61,17 @@ impl Catalog {
         // method. You could technically `collect` the sorted iterator, but
         // then you'd be returning a whole new vector. Even if you could `collect`
         // and re-`iter`, it still would clone the old vector and force you to
-        // manage the lifetime of the `collect` anyways.
+        // manage the lifetime of the `collect` anyways. `collect`ing at all also
+        // defeats the purpose of sorting the iterators in place to avoid
+        // unneccessary memory allocations
         
         // we acquire the lock before sorting just to be concise. otherwise we'd
         // have to inline-acquire the lock with `if let` and return `clone`'d sort
         // keys since the lock would be dropped and the reference invalidated.
 
         // use Option<T> to be concise with `if let`
-        let lock = if let Some(manifest) = manifest {
-            // `unwrap` is fine here because this is synchronous,
-            // single-threaded code and this is not prod :)
-            let lock = manifest.try_lock().unwrap();
-            Some(lock)
-        } 
-        else { None };
+        // seamlessly falls back upon failure to acquire the lock
+        let lock = self.api_manifest.try_lock().ok();
 
         // if the given element in `movies` or `shows` has a successfully-resolved 
         // API query, use the title from the response as a sort key, otherwise,
@@ -88,8 +87,8 @@ impl Catalog {
                 else { &a.search_term };
                 let string_b = if let Some(ref lock) = lock &&
                                   let Some(rc) = lock.get(&MediaItem::Movie((*b).clone())) &&
-                                  let QueryStatus::Success(response) = rc.as_ref() {
-                       &response.title }
+                                  let QueryStatus::Success(response_b) = rc.as_ref() {
+                       &response_b.title }
                 else { &b.search_term };
 
                 Ord::cmp(string_a, string_b)
@@ -105,8 +104,8 @@ impl Catalog {
                 else { &a.search_term };
                 let string_b = if let Some(ref lock) = lock &&
                                   let Some(rc) = lock.get(&MediaItem::Show((*b).clone())) &&
-                                  let QueryStatus::Success(response) = rc.as_ref() {
-                       &response.title }
+                                  let QueryStatus::Success(response_b) = rc.as_ref() {
+                       &response_b.title }
                 else { &b.search_term };
 
                 Ord::cmp(string_a, string_b)
@@ -114,6 +113,25 @@ impl Catalog {
             .map(|m| MediaItem::Show(m.clone()));
 
         movies.chain(shows)
+    }
+
+    // TODO: this shit needs to be rewritten. I can't think of the best relationship between the
+    //       ApiManifest and the Catalog right now.
+    pub fn try_lock_manifest<'a>(&'a self) -> Result<MutexGuard<'a, ApiManifest>, TryLockError> { self.api_manifest.try_lock() }
+    pub async fn lock<'a>(&'a self) -> MutexGuard<'a, ApiManifest> { self.api_manifest.lock().await }
+
+    pub fn stage_api_calls(&mut self) {
+        if let Some(ref client) = self.api_client {
+            for media in self.iter_all() {
+                let mut lock = self.api_manifest.try_lock().unwrap();
+                let future = ApiCallFuture::new(media.clone(), client.clone());
+                lock.push_future(future);
+
+                // let fake_call = ApiCall { item: media.clone(), status: QueryStatus::NotStarted };
+                // lock.update_api_call(fake_call);
+            }
+        }
+        // no need to check `api_client` here, `futs` will be empty otherwise.
     }
 }
 

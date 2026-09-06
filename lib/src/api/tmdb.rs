@@ -151,7 +151,7 @@ impl TMDBClient {
 
 #[async_trait]
 impl ApiClient for TMDBClient {
-    // TODO: Add checking override
+    // TODO: Add checking override for a given movie/tv
     async fn search_movie(&self, movie: Arc<Movie>) -> QueryStatus {
         if self.key.is_empty() { return QueryStatus::Failed(QueryError::UnsetApiKey) }
         self.rate_limiter.until_ready().await;

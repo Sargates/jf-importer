@@ -14,7 +14,7 @@ use tokio;
 use tokio::sync::{Mutex, MutexGuard, TryLockError};
 
 use crate::media::*;
-use crate::api::client::{ApiClient, QueryStatus, QueryResponse};
+use crate::api::client::*;
 use crate::media::MediaItem;
 
 pub struct ApiCallFuture {
@@ -50,6 +50,7 @@ impl ApiCallFuture {
         self
     }
 }
+
 impl Future for ApiCallFuture {
     type Output = ApiCall;
 
@@ -69,25 +70,51 @@ pub struct ApiManifest {
     // api_count: u32, // TODO: support tracking how many API calls are made for a single Future<T>
     outgoing: FuturesUnordered<ApiCallFuture>,
     //? Does this have to be in a mutex? I don't see anything immediately that says it does
-    api_results: Mutex<HashMap<MediaItem, Rc<QueryStatus>>>,
+    api_results: HashMap<MediaItem, Arc<QueryStatus>>,
     released: bool, // send all api calls
 }
 impl ApiManifest {
     pub fn new() -> Self {
         ApiManifest {
             outgoing: FuturesUnordered::new(),
-            api_results: Mutex::new(HashMap::new()),
+            api_results: HashMap::new(),
             released: false
         }
     }
-    pub fn try_lock<'a>(&'a self) -> Result<MutexGuard<'a, HashMap<MediaItem, Rc<QueryStatus>>>, TryLockError> { self.api_results.try_lock() }
-    pub async fn lock<'a>(&'a self) -> MutexGuard<'a, HashMap<MediaItem, Rc<QueryStatus>>> { self.api_results.lock().await }
     pub fn push_future(&mut self, f: ApiCallFuture) { self.outgoing.push(f); }
     pub fn is_empty(&self) -> bool                  { self.outgoing.is_empty() }
     pub fn send(&mut self) -> ()                    { self.released = true; }
     pub async fn next(&mut self) -> Option<ApiCall> {
         if self.released { self.outgoing.next().await } 
         else             { None }
+    }
+    pub fn update_api_call(&mut self, call: ApiCall) {
+        match &call.status {
+            QueryStatus::Success(response) => tracing::info!(
+                "[Success] Result: src -> {:?}",
+                format!(
+                    "{} ({}) [tmdbid-{}]",
+                    response.title,
+                    response.year,
+                    match &response.tmdb {
+                        ApiSpecificMediaId::TMDB(id) => id,
+                        ApiSpecificMediaId::OMDB(id) => id,
+                    }
+                )),
+            QueryStatus::Failed(query_error) => tracing::error!(
+                "[Failure] Failed to query API: {:?}",
+                query_error),
+            _ => {}
+            // we use this method for the initial insertion into the hashmap,
+            // so NotStarted will display nothing if used for that.
+        }
+        self.api_results.insert(call.item, Arc::new(call.status));
+    }
+
+    /// Returns a reference to the `Arc<T>` value inside the hashmap.
+    /// Mainly to support bindings living long enough in specific situations.
+    pub fn get(&self, item: &MediaItem) -> Option<&Arc<QueryStatus>> {
+        self.api_results.get(&item)
     }
 }
 

@@ -7,6 +7,7 @@ pub mod generating_widget;
 pub mod media_list;
 pub mod utils;
 pub mod fallback_view;
+pub mod media_info;
 
 // pub use miller_columns::MillerColumn;
 pub use catalog_view::CatalogView;
@@ -14,6 +15,7 @@ pub use generating_widget::*;
 pub use media_list::*;
 pub use utils::*;
 pub use fallback_view::*;
+pub use media_info::*;
 
 pub mod error {
     pub use super::catalog_view::TreeViewError;
@@ -22,5 +24,5 @@ pub mod error {
 
 pub trait Renderable {
     fn render(self, frame: &mut ratatui::Frame);
-    fn handle_input(self, key: crossterm::event::KeyCode);
+    fn handle_input(self, key: crossterm::event::KeyEvent);
 }
