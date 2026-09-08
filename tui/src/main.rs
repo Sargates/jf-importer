@@ -15,6 +15,7 @@ mod widgets;
 mod utils;
 mod logging;
 mod ffprobe;
+mod ratatui_ext;
 
 use app::App;
 use logging::*;

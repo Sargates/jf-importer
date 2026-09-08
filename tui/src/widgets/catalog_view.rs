@@ -2,11 +2,12 @@ use ratatui::{
     *,
     layout::*,
     widgets::*,
-    buffer::Buffer, 
+    buffer::Buffer,
     crossterm::event::{KeyEvent, KeyCode},
-    style::{Color, Modifier, Style, Stylize},
-    text::{Text, Line, Span, ToSpan}, 
+    style::{Color, Modifier, Style, Styled, Stylize},
+    text::{Text, Line, Span, ToSpan},
 };
+use ratatui_macros::{text, line};
 use ratatui::style::palette::tailwind::{BLUE, GREEN, SLATE};
 
 use futures::{future::{self, Pending}, stream::{FuturesUnordered, StreamExt}};
@@ -29,6 +30,7 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{ffprobe::ProbeResult, widgets::*};
 use crate::config::*;
+use crate::ratatui_ext::*;
 
 pub enum TreeViewUpdateError {
 
@@ -127,17 +129,7 @@ impl CatalogView {
                     self.update_media_list();
                 }
             }
-            status = info_status => {
-                // if let Some(status) = status {
-                //     // match status {
-                //     //     // Ok(_) => { self.ingest_if_complete(); },
-                //     //     // Err(err) => { tracing::info!("Error generating catalog: {:?}", err); },
-                //     //     // InfoWidgetError::NoError => todo!(),
-                //     //     // InfoWidgetError::GeneratingCatalog(generating_widget_error) => todo!(),
-                //     //     // InfoWidgetError::MediaInfoWidget(ffprobe_failure) => todo!(),
-                //     // }
-                // }
-            }
+            status = info_status => {}
             _ = futures::future::ready(()) => {} // non-blocking await
         }
 
@@ -224,6 +216,61 @@ impl CatalogView {
         let generator = GeneratingWidget::new(self.config.clone());
         self.info_widget = InfoWidget::Generating(generator);
     }
+
+    pub fn draw_catalog_info(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(ref catalog) = self.catalog &&
+           let Ok(lock) = catalog.try_lock_manifest()
+        {
+            // We filter out non-successes and non-failures,
+            // then partition based on those. Then we get two
+            // dedicated vectors.
+            // I can't figure out how to keep them as iterators
+            // to avoid re-allocation clone `collect`ing.
+            // Maybe `itertools` can help?
+            let (successes, failures): (Vec<_>, Vec<_>) = catalog.iter_all()
+                .map(|m| lock.get(&m))
+                .filter_map(|a| a)
+                .filter(|a| match ***a {
+                    QueryStatus::Success(_) | QueryStatus::Failed(_) => true,
+                    _ => false
+                })
+                .partition(|a| match ***a {
+                    QueryStatus::Success(_) => true,
+                    QueryStatus::Failed(_)  => false,
+                    _ => unreachable!(),
+                })
+            ;
+
+            let successes = successes.into_iter().count();
+            let fails = failures.into_iter().count();
+            let total = catalog.iter_all().count();
+
+            text![
+                format!("Successs: {successes}/{total}")
+                    .set_style_if(successes == total, Style::new().green()),
+                format!("Failures: {fails}/{total}")
+                    .set_style_if(fails > 0, Style::new().red()),
+            ]
+                .render(area, buf);
+        }
+    }
+
+    // ************************** LAYOUT **************************
+    fn layout_generate(&self, area: Rect) -> [Rect; 4] {
+        let [left, list_view, split] = Layout::horizontal([
+            Constraint::Length(32),
+            Constraint::Fill(1),
+            Constraint::Ratio(1, 3)])
+            .spacing(Spacing::Overlap(1))
+            // .margin(1)
+            .areas(area);
+        let [query_info, user_and_media_info] = Layout::vertical([
+            Constraint::Fill(3),
+            Constraint::Fill(2)])
+            .spacing(Spacing::Overlap(1))
+            .areas(split);
+        [left, list_view, query_info, user_and_media_info]
+    }
 }
 
 // TODO: do this properly
@@ -250,7 +297,6 @@ impl Renderable for &mut CatalogView {
             " ".into(),
         ]);
 
-        // We don't draw the border here
         let instructions = Block::new()
             .bold()
             .fg(Color::Rgb(153, 121, 61))
@@ -258,19 +304,7 @@ impl Renderable for &mut CatalogView {
             .title_bottom(instructions.centered());
         frame.render_widget(&instructions, frame.area());
 
-        let [left, list_view, split] = Layout::horizontal([
-            Constraint::Length(32),
-            Constraint::Fill(1),
-            Constraint::Ratio(1, 3)])
-            .spacing(Spacing::Overlap(1))
-            // .margin(1)
-            .areas(frame.area());
-        let [query_info, user_and_media_info] = Layout::vertical([
-            Constraint::Fill(3),
-            Constraint::Fill(2)])
-            .spacing(Spacing::Overlap(1))
-            .areas(split);
-        // [left, list_view, media_info, user_info]
+        let [left, list_view, query_info, user_and_media_info] = self.layout_generate(frame.area());
 
         let styled_block = Block::new()
             .borders(Borders::ALL)
@@ -302,9 +336,12 @@ impl Renderable for &mut CatalogView {
             .block(info_block.clone())
             .render(user_and_media_info, frame.buffer_mut());
 
-        // TODO: clean up this method
-        //       `info_widget` should be an Enum of `Generator` and `MediaInfo`
-        //       Then we match here and call dedicated functions that do this functions
+        self.draw_catalog_info(left, frame.buffer_mut());
+
+        // TODO: move these branches to separate method calls
+        //       signature:
+        //       `render_generating_view(w: &mut GeneratingWidget)`
+        //       (maybe) `render_media_info(c: &mut Catalog, lock: MutexLock<T>, selected: MediaItem)`
         match &mut self.info_widget {
             InfoWidget::Inactive => {},
             InfoWidget::Generating(widget) => {
@@ -353,7 +390,6 @@ impl Renderable for &mut CatalogView {
                 }
             },
         }
-
     }
     fn handle_input(self, event: crossterm::event::KeyEvent) {
         // tracing::info!("Key code: {:?}        Key Modifier: {:?}", event.code, event.modifiers);
@@ -384,27 +420,27 @@ impl Renderable for &mut CatalogView {
 
             // TODO: move this to a traversible menu
             crossterm::event::KeyCode::Char('p') => {
-                // because the `iter` methods on `Catalog` return iterators, we need to collect them
-                // to create a mutable reference to the `Option<Catalog>`.
-                let collect: Vec<MediaItem> = if let Some(ref catalog) = self.catalog {
-                    catalog.iter_all().collect()
-                } else { vec![] };
-                if let Some(ref mut catalog) = self.catalog {
-                    let mut lock = catalog.try_lock_manifest().unwrap();
-                    tracing::info!("Sending API requests");
-                    lock.send();
-                    // let mut lock = lock.try_lock().unwrap();
-                    for k in collect {
-                        let call_status = ApiCall {
-                            item: k.clone(), status: QueryStatus::InProgress
-                        };
-                        lock.update_api_call(call_status);
-                    }
-                    drop(lock);
-                    // update self.media_list with update hashmap values
-                    self.update_media_list();
+                match self.info_widget {
+                    InfoWidget::Inactive => {
+                        self.generate_catalog();
+                    },
+                    InfoWidget::Generating(_) => {}
+                    InfoWidget::MediaInfo if let Some(ref mut catalog) = self.catalog => {
+                        let mut lock = catalog.try_lock_manifest().unwrap();
+                        tracing::info!("Sending API requests");
+                        lock.send();
+                        for k in catalog.iter_all() {
+                            let call_status = ApiCall {
+                                item: k.clone(), status: QueryStatus::InProgress
+                            };
+                            lock.update_api_call(call_status);
+                        }
+                        drop(lock);
+                        // update self.media_list with update hashmap values
+                        self.update_media_list();
+                    },
+                    InfoWidget::MediaInfo => {},
                 }
-                else { self.generate_catalog(); }
             }
             _ => {
 

@@ -9,7 +9,6 @@ pub mod utils;
 pub mod fallback_view;
 pub mod media_info;
 
-// pub use miller_columns::MillerColumn;
 pub use catalog_view::CatalogView;
 pub use generating_widget::*;
 pub use media_list::*;

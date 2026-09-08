@@ -1202,6 +1202,7 @@ dependencies = [
  "lazy_static",
  "once_cell",
  "ratatui",
+ "ratatui-macros",
  "reqwest",
  "serde",
  "tokio",
