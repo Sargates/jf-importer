@@ -16,7 +16,7 @@ use ratatui::style::palette::tailwind::{BLUE, GREEN, SLATE};
 
 use unicode_segmentation::UnicodeSegmentation;
 
-use jfi::media::MediaItem;
+use jfi::catalog::MediaItem;
 use jfi::api::client::{QueryResponse, QueryStatus};
 
 use crate::widgets::BRAILLE;

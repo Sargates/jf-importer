@@ -1,4 +1,4 @@
-use jfi::media::*;
+use jfi::catalog::*;
 use jfi::media::ffprobe::*;
 
 use std::collections::{HashMap, HashSet, VecDeque};

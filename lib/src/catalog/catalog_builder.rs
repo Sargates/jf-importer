@@ -12,13 +12,13 @@ use ignore::*;
 use tokio::sync::{Mutex, mpsc};
 
 use crate::api::client::ApiClient;
-use crate::catalog::*;
-use crate::media::{
-    Episode,
+use crate::catalog::{
+    Catalog,
     MediaItem,
+    MediaCreateError,
     Movie,
     Show,
-    MediaCreateError
+    Episode,
 };
 
 use crate::api::{

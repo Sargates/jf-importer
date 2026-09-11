@@ -15,7 +15,7 @@ use tokio::sync::{Mutex, MutexGuard, TryLockError};
 
 use crate::media::*;
 use crate::api::client::*;
-use crate::media::MediaItem;
+use crate::catalog::MediaItem;
 
 pub struct ApiCallFuture {
     client: Arc<dyn ApiClient + Sync + Send>,

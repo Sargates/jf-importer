@@ -21,9 +21,9 @@ use std::sync::Arc;
 
 use jfi::{
     api::{ self, calls::*, client::* },
-    catalog::{Catalog, CatalogBuilder},
+    catalog::{Catalog, CatalogBuilder, MediaItem},
     config::Config,
-    media::{MediaItem, ffprobe::FFprobeFailure} 
+    media::ffprobe::FFprobeFailure,
 };
 
 use unicode_segmentation::UnicodeSegmentation;

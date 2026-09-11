@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use jfi::api::client::QueryResponse;
 // Widget to display information extracted using ffmpeg as a widget
-use jfi::media::MediaItem;
+use jfi::catalog::MediaItem;
 use jfi::media::ffprobe::*;
 use ratatui::layout::Constraint;
 use ratatui::style::Color;

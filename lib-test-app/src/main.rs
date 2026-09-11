@@ -9,7 +9,7 @@ use config::*;
 
 use std::sync::Arc;
 
-use jfi::media::{*, tag_extract};
+use jfi::catalog::{*, tag_extract};
 use jfi::api::client::{ApiClient,TMDBClient};
 use jfi::config::*;
 use jfi::catalog::*;

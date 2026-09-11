@@ -15,7 +15,7 @@ use std::time::Duration;
 use std::collections::HashMap;
 
 use crate::config::SECRETS;
-use crate::media::{MediaItem, Movie, Show, Episode};
+use crate::catalog::{MediaItem, Movie, Show, Episode};
 use crate::api::{
     client::{ApiClient, QueryStatus, QueryResponse, ApiSpecificMediaId},
     error::QueryError,
